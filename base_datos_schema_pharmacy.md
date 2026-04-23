@@ -1,262 +1,269 @@
-## Table `audit_logs`
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
 
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `user_id` | `uuid` |  |
-| `event_type` | `text` |  |
-| `description` | `text` |  Nullable |
-| `metadata` | `jsonb` |  Nullable |
-| `ip_address` | `text` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `inventory_batches`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `product_id` | `uuid` |  |
-| `po_id` | `uuid` |  Nullable |
-| `location_id` | `uuid` |  Nullable |
-| `batch_number` | `text` |  |
-| `expiry_date` | `date` |  |
-| `initial_quantity` | `numeric` |  |
-| `current_quantity` | `numeric` |  |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `inventory_movements`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `product_id` | `uuid` |  |
-| `batch_id` | `uuid` |  Nullable |
-| `batch_number` | `text` |  Nullable |
-| `from_location_id` | `uuid` |  Nullable |
-| `to_location_id` | `uuid` |  Nullable |
-| `movement_type` | `text` |  |
-| `quantity` | `numeric` |  |
-| `unit_cost` | `numeric` |  Nullable |
-| `notes` | `text` |  Nullable |
-| `created_by` | `uuid` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `locations`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `warehouse_id` | `uuid` |  |
-| `name` | `text` |  |
-| `location_type` | `text` |  |
-| `is_active` | `bool` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `patients`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `rut` | `text` |  |
-| `full_name` | `text` |  |
-| `email` | `text` |  Nullable |
-| `phone` | `text` |  Nullable |
-| `birth_date` | `date` |  Nullable |
-| `gender` | `text` |  Nullable |
-| `allergies` | `_text` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `prescription_items`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `prescription_id` | `uuid` |  |
-| `product_id` | `uuid` |  |
-| `quantity_prescribed` | `numeric` |  |
-| `dosage_instructions` | `text` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `prescriptions`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `patient_id` | `uuid` |  |
-| `folio_electronico` | `text` |  Nullable |
-| `prescriber_rut` | `text` |  |
-| `prescriber_name` | `text` |  |
-| `institution_name` | `text` |  Nullable |
-| `status` | `text` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `created_by` | `uuid` |  Nullable |
-
-## Table `products`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `name` | `text` |  |
-| `brand` | `text` |  Nullable |
-| `dci` | `text` |  |
-| `registro_sanitario` | `text` |  |
-| `barcode` | `text` |  Nullable |
-| `active_principle` | `text` |  Nullable |
-| `concentration` | `text` |  Nullable |
-| `presentation` | `text` |  Nullable |
-| `is_bioequivalent` | `bool` |  Nullable |
-| `is_controlled` | `bool` |  Nullable |
-| `sale_condition` | `text` |  |
-| `stock_quantity` | `numeric` |  Nullable |
-| `min_stock` | `numeric` |  Nullable |
-| `price_sale` | `numeric` |  |
-| `cost_unit` | `numeric` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `updated_at` | `timestamptz` |  Nullable |
-| `created_by` | `uuid` |  Nullable |
-| `updated_by` | `uuid` |  Nullable |
-| `active_ingredient` | `text` |  Nullable |
-| `laboratory_name` | `text` |  Nullable |
-| `isp_registry_number` | `text` |  Nullable |
-| `unit_price` | `numeric` |  Nullable |
-| `purchase_uom` | `text` |  Nullable |
-| `sale_uom` | `text` |  Nullable |
-| `conversion_factor` | `numeric` |  Nullable |
-| `barcode_purchase` | `text` |  Nullable |
-
-## Table `purchase_order_items`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `po_id` | `uuid` |  |
-| `product_id` | `uuid` |  |
-| `quantity` | `numeric` |  |
-| `unit_cost` | `numeric` |  |
-| `total_cost` | `numeric` |  |
-| `created_at` | `timestamptz` |  Nullable |
-| `quantity_received` | `numeric` |  Nullable |
-| `updated_by` | `uuid` |  Nullable |
-
-## Table `purchase_orders`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `supplier_id` | `uuid` |  |
-| `status` | `text` |  Nullable |
-| `total_neto` | `numeric` |  Nullable |
-| `tax_amount` | `numeric` |  Nullable |
-| `total_amount` | `numeric` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `po_number` | `int4` |  Nullable |
-| `created_by` | `uuid` |  Nullable |
-| `expected_delivery_date` | `date` |  Nullable |
-| `issue_date` | `timestamptz` |  Nullable |
-| `total_net` | `numeric` |  Nullable |
-| `observation_notes` | `text` |  Nullable |
-| `payment_terms_days` | `int4` |  Nullable |
-| `updated_by` | `uuid` |  Nullable |
-
-## Table `sale_items`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `sale_id` | `uuid` |  Nullable |
-| `product_id` | `uuid` |  Nullable |
-| `batch_id` | `uuid` |  Nullable |
-| `quantity` | `numeric` |  |
-| `unit_price` | `numeric` |  |
-| `subtotal` | `numeric` |  |
-
-## Table `sales`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `user_id` | `uuid` |  |
-| `patient_id` | `uuid` |  Nullable |
-| `total_amount` | `numeric` |  |
-| `payment_method` | `text` |  Nullable |
-| `document_number` | `text` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-
-## Table `suppliers`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `rut` | `text` |  |
-| `legal_name` | `text` |  |
-| `commercial_name` | `text` |  Nullable |
-| `business_line` | `text` |  Nullable |
-| `contact_email` | `text` |  Nullable |
-| `contact_phone` | `text` |  Nullable |
-| `address` | `text` |  Nullable |
-| `isp_resolution_number` | `text` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `created_by` | `uuid` |  Nullable |
-| `updated_by` | `uuid` |  Nullable |
-| `legal_representative` | `text` |  Nullable |
-| `contact_person_name` | `text` |  Nullable |
-| `contact_person_role` | `text` |  Nullable |
-| `address_city` | `text` |  Nullable |
-| `address_commune` | `text` |  Nullable |
-| `website_url` | `text` |  Nullable |
-| `social_media_links` | `jsonb` |  Nullable |
-| `payment_terms_days` | `int4` |  Nullable |
-| `bank_details` | `jsonb` |  Nullable |
-| `observation_notes` | `text` |  Nullable |
-| `compliance_rate` | `numeric` |  Nullable |
-| `average_delivery_days` | `int4` |  Nullable |
-
-## Table `warehouses`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `company_id` | `uuid` |  |
-| `name` | `text` |  |
-| `is_active` | `bool` |  Nullable |
-| `created_at` | `timestamptz` |  Nullable |
-| `created_by` | `uuid` |  Nullable |
-
+CREATE TABLE pharmacy.audit_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  event_type text NOT NULL,
+  description text,
+  metadata jsonb,
+  ip_address text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT audit_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT audit_logs_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT audit_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE pharmacy.inventory_batches (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  product_id uuid NOT NULL,
+  po_id uuid,
+  location_id uuid,
+  batch_number text NOT NULL,
+  expiry_date date NOT NULL,
+  initial_quantity numeric NOT NULL DEFAULT 0,
+  current_quantity numeric NOT NULL DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT inventory_batches_pkey PRIMARY KEY (id),
+  CONSTRAINT inventory_batches_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT inventory_batches_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id),
+  CONSTRAINT inventory_batches_po_id_fkey FOREIGN KEY (po_id) REFERENCES pharmacy.purchase_orders(id),
+  CONSTRAINT inventory_batches_location_id_fkey FOREIGN KEY (location_id) REFERENCES pharmacy.locations(id)
+);
+CREATE TABLE pharmacy.inventory_movements (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  product_id uuid NOT NULL,
+  batch_id uuid,
+  batch_number text,
+  from_location_id uuid,
+  to_location_id uuid,
+  movement_type text NOT NULL CHECK (movement_type = ANY (ARRAY['IN_PURCHASE'::text, 'OUT_SALE'::text, 'INTERNAL_TRANSFER'::text, 'ADJUSTMENT'::text])),
+  quantity numeric NOT NULL CHECK (quantity > 0::numeric),
+  unit_cost numeric DEFAULT 0,
+  notes text,
+  created_by uuid,
+  created_at timestamp with time zone DEFAULT now(),
+  receipt_id uuid,
+  CONSTRAINT inventory_movements_pkey PRIMARY KEY (id),
+  CONSTRAINT inventory_movements_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT inventory_movements_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id),
+  CONSTRAINT inventory_movements_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES pharmacy.inventory_batches(id),
+  CONSTRAINT inventory_movements_from_location_id_fkey FOREIGN KEY (from_location_id) REFERENCES pharmacy.locations(id),
+  CONSTRAINT inventory_movements_to_location_id_fkey FOREIGN KEY (to_location_id) REFERENCES pharmacy.locations(id),
+  CONSTRAINT inventory_movements_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id),
+  CONSTRAINT inventory_movements_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES pharmacy.inventory_receipts(id)
+);
+CREATE TABLE pharmacy.inventory_receipts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  po_id uuid,
+  supplier_id uuid,
+  document_type text NOT NULL CHECK (document_type = ANY (ARRAY['GUIA_DESPACHO'::text, 'FACTURA'::text, 'BOLETA'::text, 'AJUSTE'::text])),
+  document_number text NOT NULL,
+  received_date timestamp with time zone DEFAULT now(),
+  notes text,
+  created_by uuid,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT inventory_receipts_pkey PRIMARY KEY (id),
+  CONSTRAINT inventory_receipts_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT inventory_receipts_po_id_fkey FOREIGN KEY (po_id) REFERENCES pharmacy.purchase_orders(id),
+  CONSTRAINT inventory_receipts_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES pharmacy.suppliers(id),
+  CONSTRAINT inventory_receipts_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
+);
+CREATE TABLE pharmacy.locations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  warehouse_id uuid NOT NULL,
+  name text NOT NULL,
+  location_type text NOT NULL CHECK (location_type = ANY (ARRAY['QUARANTINE'::text, 'STORAGE'::text, 'SALES'::text, 'COLD_CHAIN'::text, 'SECURE'::text])),
+  is_active boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT locations_pkey PRIMARY KEY (id),
+  CONSTRAINT locations_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT locations_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES pharmacy.warehouses(id)
+);
+CREATE TABLE pharmacy.patients (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  rut text NOT NULL,
+  full_name text NOT NULL,
+  email text,
+  phone text,
+  birth_date date,
+  gender text,
+  allergies ARRAY,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT patients_pkey PRIMARY KEY (id),
+  CONSTRAINT patients_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id)
+);
+CREATE TABLE pharmacy.prescription_items (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  prescription_id uuid NOT NULL,
+  product_id uuid NOT NULL,
+  quantity_prescribed numeric NOT NULL,
+  dosage_instructions text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT prescription_items_pkey PRIMARY KEY (id),
+  CONSTRAINT prescription_items_prescription_id_fkey FOREIGN KEY (prescription_id) REFERENCES pharmacy.prescriptions(id),
+  CONSTRAINT prescription_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id)
+);
+CREATE TABLE pharmacy.prescriptions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  patient_id uuid NOT NULL,
+  folio_electronico text,
+  prescriber_rut text NOT NULL,
+  prescriber_name text NOT NULL,
+  institution_name text,
+  status text DEFAULT 'PENDING'::text CHECK (status = ANY (ARRAY['PENDING'::text, 'DISPENSED'::text, 'EXPIRED'::text, 'CANCELLED'::text])),
+  created_at timestamp with time zone DEFAULT now(),
+  created_by uuid,
+  CONSTRAINT prescriptions_pkey PRIMARY KEY (id),
+  CONSTRAINT prescriptions_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT prescriptions_patient_id_fkey FOREIGN KEY (patient_id) REFERENCES pharmacy.patients(id),
+  CONSTRAINT prescriptions_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
+);
+CREATE TABLE pharmacy.products (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  name text NOT NULL,
+  brand text,
+  dci text NOT NULL,
+  registro_sanitario text NOT NULL,
+  barcode text,
+  active_principle text,
+  concentration text,
+  presentation text,
+  is_bioequivalent boolean DEFAULT false,
+  is_controlled boolean DEFAULT false,
+  sale_condition text NOT NULL CHECK (sale_condition = ANY (ARRAY['VD'::text, 'R'::text, 'RR'::text, 'RCH'::text])),
+  stock_quantity numeric DEFAULT 0,
+  min_stock numeric DEFAULT 5,
+  price_sale numeric NOT NULL DEFAULT 0,
+  cost_unit numeric DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  created_by uuid,
+  updated_by uuid,
+  active_ingredient text,
+  laboratory_name text,
+  isp_registry_number text,
+  unit_price numeric DEFAULT 0,
+  purchase_uom text DEFAULT 'CAJA'::text,
+  sale_uom text DEFAULT 'UNIDAD'::text,
+  conversion_factor numeric DEFAULT 1,
+  barcode_purchase text,
+  CONSTRAINT products_pkey PRIMARY KEY (id),
+  CONSTRAINT products_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT products_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id),
+  CONSTRAINT products_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id)
+);
+CREATE TABLE pharmacy.purchase_order_items (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  po_id uuid NOT NULL,
+  product_id uuid NOT NULL,
+  quantity numeric NOT NULL CHECK (quantity > 0::numeric),
+  unit_cost numeric NOT NULL DEFAULT 0,
+  total_cost numeric NOT NULL DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  quantity_received numeric DEFAULT 0,
+  updated_by uuid,
+  conversion_factor numeric DEFAULT 1,
+  CONSTRAINT purchase_order_items_pkey PRIMARY KEY (id),
+  CONSTRAINT purchase_order_items_po_id_fkey FOREIGN KEY (po_id) REFERENCES pharmacy.purchase_orders(id),
+  CONSTRAINT purchase_order_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id),
+  CONSTRAINT purchase_order_items_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id)
+);
+CREATE TABLE pharmacy.purchase_orders (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  supplier_id uuid NOT NULL,
+  status text DEFAULT 'PENDING'::text CHECK (status = ANY (ARRAY['PENDING'::text, 'PARTIAL'::text, 'RECEIVED'::text, 'CANCELLED'::text, 'DRAFT'::text])),
+  total_neto numeric DEFAULT 0,
+  tax_amount numeric DEFAULT 0,
+  total_amount numeric DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  po_number integer,
+  created_by uuid,
+  expected_delivery_date date,
+  issue_date timestamp with time zone DEFAULT now(),
+  total_net numeric DEFAULT 0,
+  observation_notes text,
+  payment_terms_days integer,
+  updated_by uuid,
+  CONSTRAINT purchase_orders_pkey PRIMARY KEY (id),
+  CONSTRAINT purchase_orders_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT purchase_orders_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id),
+  CONSTRAINT fk_pharmacy_po_supplier FOREIGN KEY (supplier_id) REFERENCES pharmacy.suppliers(id),
+  CONSTRAINT purchase_orders_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id)
+);
+CREATE TABLE pharmacy.sale_items (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  sale_id uuid,
+  product_id uuid,
+  batch_id uuid,
+  quantity numeric NOT NULL,
+  unit_price numeric NOT NULL,
+  subtotal numeric NOT NULL,
+  CONSTRAINT sale_items_pkey PRIMARY KEY (id),
+  CONSTRAINT sale_items_sale_id_fkey FOREIGN KEY (sale_id) REFERENCES pharmacy.sales(id),
+  CONSTRAINT sale_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id)
+);
+CREATE TABLE pharmacy.sales (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  patient_id uuid,
+  total_amount numeric NOT NULL,
+  payment_method text CHECK (payment_method = ANY (ARRAY['CASH'::text, 'CARD'::text, 'TRANSFER'::text])),
+  document_number text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT sales_pkey PRIMARY KEY (id),
+  CONSTRAINT sales_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT sales_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT sales_patient_id_fkey FOREIGN KEY (patient_id) REFERENCES pharmacy.patients(id)
+);
+CREATE TABLE pharmacy.suppliers (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  rut text NOT NULL,
+  legal_name text NOT NULL,
+  commercial_name text,
+  business_line text DEFAULT 'Laboratorio Farmacéutico'::text,
+  contact_email text,
+  contact_phone text,
+  address text,
+  isp_resolution_number text,
+  created_at timestamp with time zone DEFAULT now(),
+  created_by uuid,
+  updated_by uuid,
+  legal_representative text,
+  contact_person_name text,
+  contact_person_role text,
+  address_city text,
+  address_commune text,
+  website_url text,
+  social_media_links jsonb DEFAULT '{}'::jsonb,
+  payment_terms_days integer DEFAULT 30,
+  bank_details jsonb DEFAULT '{}'::jsonb,
+  observation_notes text,
+  compliance_rate numeric DEFAULT 100,
+  average_delivery_days integer,
+  CONSTRAINT suppliers_pkey PRIMARY KEY (id),
+  CONSTRAINT suppliers_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT suppliers_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id),
+  CONSTRAINT suppliers_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id)
+);
+CREATE TABLE pharmacy.warehouses (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  name text NOT NULL,
+  is_active boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  created_by uuid,
+  CONSTRAINT warehouses_pkey PRIMARY KEY (id),
+  CONSTRAINT warehouses_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT warehouses_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
+);

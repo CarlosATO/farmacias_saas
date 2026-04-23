@@ -364,7 +364,8 @@ export const createPurchaseOrderWithItems = async (headerData, items) => {
     product_id: item.product_id,
     quantity: item.quantity,
     unit_cost: item.unit_cost,
-    total_cost: item.quantity * item.unit_cost
+    total_cost: item.quantity * item.unit_cost,
+    conversion_factor: item.conversion_factor || 1
   }));
 
   const { error: itemsError } = await schema

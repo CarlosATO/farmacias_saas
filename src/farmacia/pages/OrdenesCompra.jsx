@@ -43,7 +43,6 @@ export default function OrdenesCompra() {
     
     const [receiptData, setReceiptData] = useState({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '' });
     
-    const [showReceiveModal, setShowReceiveModal] = useState(false);
     const [modalLoading, setModalLoading] = useState(false);
 
     const fetchInitialData = useCallback(async () => {
@@ -140,7 +139,8 @@ export default function OrdenesCompra() {
     const addBatchToItem = (itemIndex) => {
         setReceiveItems(prev => {
             const newItems = [...prev];
-            newItems[itemIndex].batches.push({ entered_quantity: '', batch_number: '', expiry_date: '' });
+            const updatedBatches = [...newItems[itemIndex].batches, { entered_quantity: '', batch_number: '', expiry_date: '' }];
+            newItems[itemIndex] = { ...newItems[itemIndex], batches: updatedBatches };
             return newItems;
         });
     };
@@ -148,7 +148,9 @@ export default function OrdenesCompra() {
     const removeBatchFromItem = (itemIndex, batchIndex) => {
         setReceiveItems(prev => {
             const newItems = [...prev];
-            newItems[itemIndex].batches.splice(batchIndex, 1);
+            const updatedBatches = [...newItems[itemIndex].batches];
+            updatedBatches.splice(batchIndex, 1);
+            newItems[itemIndex] = { ...newItems[itemIndex], batches: updatedBatches };
             return newItems;
         });
     };
@@ -156,7 +158,9 @@ export default function OrdenesCompra() {
     const updateBatch = (itemIndex, batchIndex, field, value) => {
         setReceiveItems(prev => {
             const newItems = [...prev];
-            newItems[itemIndex].batches[batchIndex][field] = value;
+            const updatedBatches = [...newItems[itemIndex].batches];
+            updatedBatches[batchIndex] = { ...updatedBatches[batchIndex], [field]: value };
+            newItems[itemIndex] = { ...newItems[itemIndex], batches: updatedBatches };
             return newItems;
         });
     };
@@ -184,7 +188,7 @@ export default function OrdenesCompra() {
                         unit_cost: item.unit_cost,
                         batch_number: b.batch_number,
                         expiry_date: b.expiry_date,
-                        conversion_factor: item.product?.conversion_factor || 1
+                        conversion_factor: item.conversion_factor || item.product?.conversion_factor || 1
                     });
                 }
             }
@@ -234,7 +238,8 @@ export default function OrdenesCompra() {
                     product_id: product.id,
                     name: product.name,
                     quantity: 1,
-                    unit_cost: product.unit_price ?? product.cost_price ?? 0
+                    unit_cost: product.unit_price ?? product.cost_price ?? 0,
+                    conversion_factor: product.conversion_factor || 1
                 }]
             };
         });
@@ -394,65 +399,107 @@ export default function OrdenesCompra() {
                                         {receiveItems.map((item, idx) => {
                                             const receivedHist = Number(item.quantity_received || 0);
                                             const pending = item.quantity - receivedHist;
-                                            const uom = item.product?.purchase_uom || 'Unidad';
+                                            const uom = item.product?.purchase_uom || 'Cajas/Embalajes';
+                                            const factor = item.conversion_factor || item.product?.conversion_factor || 1;
+                                            const expectedUnits = item.quantity * factor;
+                                            const lineEntered = item.batches.reduce((sum, b) => sum + Number(b.entered_quantity || 0), 0);
+                                            const lineSubtotal = lineEntered * Number(item.unit_cost || 0);
 
                                             return (
-                                                <div key={idx} className="rounded-md border border-gray-100 bg-gray-50 p-4">
-                                                    <div className="mb-3 flex justify-between items-center border-b border-gray-200 pb-2">
+                                                <div key={idx} className="rounded-md border border-gray-100 bg-gray-50 p-4 shadow-sm relative overflow-hidden">
+                                                    {/* Validador Visual */}
+                                                    <div className="absolute top-0 left-0 w-full h-1 bg-gray-200">
+                                                        <div 
+                                                            className={`h-full ${receivedHist >= item.quantity ? 'bg-green-500' : 'bg-[#4C3073]'}`} 
+                                                            style={{ width: `${Math.min(100, (receivedHist / item.quantity) * 100)}%` }}
+                                                        ></div>
+                                                    </div>
+                                                    
+                                                    <div className="mb-3 flex justify-between items-start border-b border-gray-200 pb-3 mt-1">
                                                         <div>
-                                                            <p className="text-sm font-bold text-gray-800">{item.product?.name || item.name}</p>
-                                                            <p className="text-xs text-gray-500">
-                                                                Pedida: <b>{item.quantity}</b> | Recibida: <b>{receivedHist}</b> | Pendiente: <b className="text-red-500">{pending}</b> | Costo: <b>${Number(item.unit_cost || 0).toLocaleString('es-CL')}</b>
-                                                            </p>
+                                                            <p className="text-lg font-black text-[#4C3073] uppercase tracking-tight">{item.product?.name || item.name}</p>
+                                                            <div className="flex gap-4 mt-2">
+                                                                <span className="bg-white border border-gray-200 px-2 py-1 rounded-sm text-[10px] font-bold text-gray-500">
+                                                                    PEDIDO: <span className="text-gray-900">{item.quantity} {uom}</span>
+                                                                </span>
+                                                                <span className="bg-white border border-gray-200 px-2 py-1 rounded-sm text-[10px] font-bold text-gray-500">
+                                                                    FACTOR: <span className="text-gray-900">x{factor}</span>
+                                                                </span>
+                                                                <span className="bg-purple-50 border border-purple-100 px-2 py-1 rounded-sm text-[10px] font-bold text-[#4C3073]">
+                                                                    ESPERADO: {expectedUnits} UNIDADES DE VENTA
+                                                                </span>
+                                                            </div>
                                                         </div>
-                                                        {pending > 0 && (
-                                                            <button onClick={() => addBatchToItem(idx)} className="text-xs bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 px-3 py-1 rounded font-bold uppercase tracking-wider flex items-center gap-1 shadow-sm">
-                                                                <Plus size={14} /> Añadir Lote
-                                                            </button>
-                                                        )}
+                                                        <div className="text-right flex flex-col items-end">
+                                                            <div className="flex gap-2 items-center">
+                                                                <div className="text-[10px] font-bold text-gray-500">PROGRESO:</div>
+                                                                <div className={`px-3 py-1 rounded-sm text-xs font-black border ${pending === 0 ? 'bg-green-50 text-green-700 border-green-200' : 'bg-blue-50 text-blue-700 border-blue-200'}`}>
+                                                                    Ingresando: {lineEntered + receivedHist} / Pedido: {item.quantity}
+                                                                </div>
+                                                            </div>
+                                                            {pending > 0 && (
+                                                                <button onClick={() => addBatchToItem(idx)} className="mt-2 text-[10px] bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 px-2 py-1 rounded font-bold uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                                                                    <Plus size={12} /> Añadir Lote
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                     
                                                     {pending === 0 ? (
-                                                        <p className="text-xs text-emerald-600 font-bold uppercase tracking-wider bg-emerald-50 inline-block px-2 py-1 rounded">Línea completada</p>
+                                                        <p className="text-xs text-emerald-600 font-bold uppercase tracking-wider bg-emerald-50 inline-block px-2 py-1 rounded mt-2 border border-emerald-100">✓ Línea completada en recepciones anteriores</p>
                                                     ) : (
-                                                        <div className="space-y-3 mt-4">
+                                                        <div className="space-y-2 mt-3">
                                                             {item.batches.map((batch, bIdx) => (
-                                                                <div key={bIdx} className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] items-end bg-white p-3 rounded-md border border-gray-200 shadow-sm relative">
-                                                                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
-                                                                        Cantidad a Ingresar
-                                                                        <span className="block text-[9px] text-[#4C3073] font-normal normal-case mb-1">Cantidad (en {uom})</span>
+                                                                <div key={bIdx} className="grid grid-cols-1 gap-3 sm:grid-cols-[0.7fr_1.2fr_1fr_0.9fr_1fr_auto] items-end bg-white p-3 rounded-md border border-gray-200 shadow-sm relative group hover:border-[#4C3073]/30 transition-colors">
+                                                                    <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">
+                                                                        Cant. Ingresada
+                                                                        <span className="block text-[9px] text-[#4C3073] font-normal normal-case mb-1">Cajas/Emb.</span>
                                                                         <input
                                                                             type="number"
                                                                             min="1"
                                                                             value={batch.entered_quantity}
                                                                             onChange={e => updateBatch(idx, bIdx, 'entered_quantity', e.target.value)}
-                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] font-bold [&::-webkit-inner-spin-button]:appearance-none"
                                                                             placeholder="Ej: 10"
                                                                         />
                                                                     </label>
-                                                                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
+                                                                    <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">
                                                                         N° de Lote
                                                                         <span className="block text-[9px] text-transparent mb-1">-</span>
                                                                         <input
                                                                             type="text"
                                                                             value={batch.batch_number}
                                                                             onChange={e => updateBatch(idx, bIdx, 'batch_number', e.target.value)}
-                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] font-mono"
                                                                             placeholder="Lote"
                                                                         />
                                                                     </label>
-                                                                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
-                                                                        Fecha de Vencimiento
+                                                                    <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">
+                                                                        Vencimiento
                                                                         <span className="block text-[9px] text-transparent mb-1">-</span>
                                                                         <input
                                                                             type="date"
                                                                             value={batch.expiry_date}
                                                                             onChange={e => updateBatch(idx, bIdx, 'expiry_date', e.target.value)}
-                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
                                                                         />
                                                                     </label>
-                                                                    <button onClick={() => removeBatchFromItem(idx, bIdx)} className="mb-2 text-gray-400 hover:text-red-500 p-1.5 bg-gray-50 rounded-full shadow-sm border border-gray-200 ml-2 transition-colors" title="Quitar Lote">
-                                                                        <X size={16} />
+                                                                    <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">
+                                                                        Costo Unit.
+                                                                        <span className="block text-[9px] text-transparent mb-1">-</span>
+                                                                        <div className="w-full rounded-sm border border-transparent bg-gray-50 px-2 py-1.5 text-xs text-gray-600 font-mono h-[34px] flex items-center">
+                                                                            ${Number(item.unit_cost || 0).toLocaleString('es-CL')}
+                                                                        </div>
+                                                                    </label>
+                                                                    <label className="block text-[10px] font-black uppercase tracking-wider text-[#4C3073]">
+                                                                        Subtotal Lote
+                                                                        <span className="block text-[9px] text-transparent mb-1">-</span>
+                                                                        <div className="w-full rounded-sm border border-purple-100 bg-purple-50 px-2 py-1.5 text-xs text-[#4C3073] font-bold font-mono h-[34px] flex items-center">
+                                                                            ${(Number(batch.entered_quantity || 0) * Number(item.unit_cost || 0)).toLocaleString('es-CL')}
+                                                                        </div>
+                                                                    </label>
+                                                                    <button onClick={() => removeBatchFromItem(idx, bIdx)} className="mb-1 text-gray-400 hover:text-red-500 p-1.5 bg-gray-50 rounded-full shadow-sm border border-gray-200 ml-1 transition-colors opacity-50 group-hover:opacity-100" title="Quitar Lote">
+                                                                        <X size={14} />
                                                                     </button>
                                                                 </div>
                                                             ))}
@@ -461,6 +508,34 @@ export default function OrdenesCompra() {
                                                 </div>
                                             );
                                         })}
+                                    </div>
+                                </div>
+                                <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-6 flex justify-end">
+                                    <div className="w-80 space-y-3 bg-[#f8f9fa] p-6 rounded-lg border border-gray-100">
+                                        {(() => {
+                                            const currentReceivedSubtotal = receiveItems.reduce((sum, item) => {
+                                                const enteredForThisItem = item.batches.reduce((bSum, b) => bSum + Number(b.entered_quantity || 0), 0);
+                                                return sum + (enteredForThisItem * Number(item.unit_cost || 0));
+                                            }, 0);
+                                            const currentReceivedTax = currentReceivedSubtotal * 0.19;
+                                            const currentReceivedTotal = currentReceivedSubtotal + currentReceivedTax;
+                                            return (
+                                                <>
+                                                    <div className="flex justify-between text-[11px] font-black text-gray-400 uppercase tracking-widest">
+                                                        <span>Subtotal Ingresado</span>
+                                                        <span className="text-gray-700">${currentReceivedSubtotal.toLocaleString('es-CL')}</span>
+                                                    </div>
+                                                    <div className="flex justify-between text-[11px] font-black text-gray-400 uppercase tracking-widest">
+                                                        <span>IVA (19%)</span>
+                                                        <span className="text-gray-700">${currentReceivedTax.toLocaleString('es-CL')}</span>
+                                                    </div>
+                                                    <div className="pt-4 border-t border-gray-200 flex justify-between items-end">
+                                                        <span className="text-sm font-black text-gray-900 uppercase italic">Total a Recibir</span>
+                                                        <span className="text-2xl font-black text-[#4C3073]">${currentReceivedTotal.toLocaleString('es-CL')}</span>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
                             </>
@@ -811,12 +886,28 @@ export default function OrdenesCompra() {
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                                 {currentPO.items.map((it, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-50 transition-colors group">
-                                        <td className="px-10 py-3 font-bold text-gray-700 uppercase tracking-tight">{it.name}</td>
-                                        <td className="px-4 py-3"><input type="number" value={it.quantity} onChange={e => updateItem(idx, 'quantity', e.target.value)} className="w-full text-right bg-transparent border-b border-transparent group-hover:border-gray-200 focus:border-[#4C3073] outline-none py-1 font-bold text-gray-900" /></td>
-                                        <td className="px-4 py-3"><input type="number" value={it.unit_cost} onChange={e => updateItem(idx, 'unit_cost', e.target.value)} className="w-full text-right bg-transparent border-b border-transparent group-hover:border-gray-200 focus:border-[#4C3073] outline-none py-1 font-bold text-gray-900" /></td>
-                                        <td className="px-4 py-3 text-right font-black text-[#4C3073] tabular-nums">${Number(it.quantity * it.unit_cost).toLocaleString('es-CL')}</td>
-                                        <td className="px-6 py-3 text-center"><button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-500"><X size={16}/></button></td>
+                                    <tr key={idx} className="hover:bg-gray-50 transition-colors group border-b border-gray-100 last:border-0">
+                                        <td className="px-10 py-4">
+                                            <div className="font-bold text-gray-800 uppercase tracking-tight">{it.name}</div>
+                                            <div className="text-[10px] text-gray-500 mt-2 flex items-center gap-2">
+                                                <span>Este proveedor despacha</span>
+                                                <input 
+                                                    type="number" 
+                                                    min="1"
+                                                    value={it.conversion_factor} 
+                                                    onChange={e => updateItem(idx, 'conversion_factor', e.target.value)} 
+                                                    className="w-16 text-center border border-gray-200 bg-white rounded-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none py-1 font-bold text-[#4C3073] shadow-sm transition-all [&::-webkit-inner-spin-button]:appearance-none" 
+                                                />
+                                                <span>unidades por embalaje.</span>
+                                                <span className="ml-2 font-mono text-[#4C3073] bg-purple-50 px-2 py-1 rounded-sm border border-purple-100 font-bold flex items-center gap-1">
+                                                    {it.quantity || 0} Solicitadas × {it.conversion_factor || 1} Tasa = {(it.quantity || 0) * (it.conversion_factor || 1)} Unidades de Venta
+                                                </span>
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-4 align-middle"><input type="number" min="1" value={it.quantity} onChange={e => updateItem(idx, 'quantity', e.target.value)} className="w-full text-right bg-transparent border-b border-transparent group-hover:border-gray-200 focus:border-[#4C3073] outline-none py-1 font-bold text-gray-900 [&::-webkit-inner-spin-button]:appearance-none" /></td>
+                                        <td className="px-4 py-4 align-middle"><input type="number" min="0" value={it.unit_cost} onChange={e => updateItem(idx, 'unit_cost', e.target.value)} className="w-full text-right bg-transparent border-b border-transparent group-hover:border-gray-200 focus:border-[#4C3073] outline-none py-1 font-bold text-gray-900 [&::-webkit-inner-spin-button]:appearance-none" /></td>
+                                        <td className="px-4 py-4 align-middle text-right font-black text-[#4C3073] tabular-nums">${Number(it.quantity * it.unit_cost).toLocaleString('es-CL')}</td>
+                                        <td className="px-6 py-4 align-middle text-center"><button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-500 transition-colors"><X size={16}/></button></td>
                                     </tr>
                                 ))}
                                 <tr className="bg-gray-50/50 cursor-pointer">

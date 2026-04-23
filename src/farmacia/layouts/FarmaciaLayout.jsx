@@ -51,17 +51,8 @@ export default function FarmaciaLayout({ children }) {
     const [userName, setUserName]           = useState('');
     const [companyName, setCompanyName]     = useState('Datix ERP');
     const [loading, setLoading]             = useState(true);
-    const [activeTabId, setActiveTabId]     = useState(null);
 
     useEffect(() => { fetchUserData(); }, []);
-
-    useEffect(() => {
-        const tabs = buildRibbonTabs();
-        const found = tabs.find(t => t.items?.some(i => i.to === location.pathname)) || 
-                      tabs.find(t => t.items?.some(i => i.to !== '/' && location.pathname.startsWith(i.to)));
-        if (found) setActiveTabId(found.id);
-        else setActiveTabId('farmacia');
-    }, [location.pathname]);
 
     const fetchUserData = async () => {
         try {
@@ -84,7 +75,6 @@ export default function FarmaciaLayout({ children }) {
     if (loading) return <div className="h-screen bg-gray-50 flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#4C3073]"></div></div>;
 
     const tabs = buildRibbonTabs();
-    const currentTab = tabs.find(t => t.id === activeTabId) || tabs.find(t => t.id === 'farmacia');
 
     return (
         <div className="flex flex-col h-screen font-sans text-white/90 text-[13px] overflow-hidden" style={{ backgroundColor: '#45316D' }}>
