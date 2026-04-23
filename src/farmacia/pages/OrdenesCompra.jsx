@@ -3,7 +3,7 @@ import { supabase } from '../../api/supabaseClient';
 import { 
   Plus, Package, Search, X, Check, ArrowLeft, Loader2, 
   Trash2, Box, Eye, Send, ChevronRight, FileText, 
-  ClipboardList, Calendar, DollarSign, Truck
+  ClipboardList, Calendar, DollarSign, Truck, PackageCheck
 } from 'lucide-react';
 import { 
   fetchPharmacyProducts, 
@@ -11,7 +11,8 @@ import {
   fetchPurchaseOrders, 
   fetchPurchaseOrderItems,
   createPurchaseOrderWithItems,
-  receivePurchaseOrder
+  receivePurchaseOrder,
+  fetchOrderReceipts
 } from '../api/pharmacyClient';
 import SearchableSelect from '../components/SearchableSelect';
 
@@ -37,8 +38,11 @@ export default function OrdenesCompra() {
     });
     const [selectedOrder, setSelectedOrder] = useState(null);
     const [selectedOrderItems, setSelectedOrderItems] = useState([]);
+    const [orderReceipts, setOrderReceipts] = useState([]);
     const [receiveItems, setReceiveItems] = useState([]);
-    const [showOrderModal, setShowOrderModal] = useState(false);
+    
+    const [receiptData, setReceiptData] = useState({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '' });
+    
     const [showReceiveModal, setShowReceiveModal] = useState(false);
     const [modalLoading, setModalLoading] = useState(false);
 
@@ -94,18 +98,22 @@ export default function OrdenesCompra() {
         return `OC-${raw.padStart(5, '0')}`;
     };
 
-    const openOrderModal = async (po) => {
+    const openOrderDetail = async (po) => {
         try {
-            setModalLoading(true);
+            setLoading(true);
             setSelectedOrder(po);
-            const res = await fetchPurchaseOrderItems(po.id);
-            setSelectedOrderItems(res.data || []);
-            setShowOrderModal(true);
+            const [resItems, resReceipts] = await Promise.all([
+                fetchPurchaseOrderItems(po.id),
+                fetchOrderReceipts(po.id)
+            ]);
+            setSelectedOrderItems(resItems.data || []);
+            setOrderReceipts(resReceipts.data || []);
+            setView('detail');
         } catch (error) {
             console.error('Error cargando detalles de OC:', error);
             alert('No se pudieron cargar los detalles de la orden.');
         } finally {
-            setModalLoading(false);
+            setLoading(false);
         }
     };
 
@@ -116,12 +124,11 @@ export default function OrdenesCompra() {
             const res = await fetchPurchaseOrderItems(po.id);
             const items = (res.data || []).map(item => ({
                 ...item,
-                received_quantity: item.quantity,
-                batch_number: '',
-                expiry_date: ''
+                batches: [{ entered_quantity: '', batch_number: '', expiry_date: '' }]
             }));
             setReceiveItems(items);
-            setShowReceiveModal(true);
+            setReceiptData({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '', supplier_id: po.supplier_id });
+            setView('receive');
         } catch (error) {
             console.error('Error cargando orden para recepción:', error);
             alert('No se pudieron cargar los datos de recepción.');
@@ -130,35 +137,73 @@ export default function OrdenesCompra() {
         }
     };
 
-    const updateReceiveItem = (index, field, value) => {
+    const addBatchToItem = (itemIndex) => {
         setReceiveItems(prev => {
             const newItems = [...prev];
-            newItems[index] = { ...newItems[index], [field]: value };
+            newItems[itemIndex].batches.push({ entered_quantity: '', batch_number: '', expiry_date: '' });
+            return newItems;
+        });
+    };
+
+    const removeBatchFromItem = (itemIndex, batchIndex) => {
+        setReceiveItems(prev => {
+            const newItems = [...prev];
+            newItems[itemIndex].batches.splice(batchIndex, 1);
+            return newItems;
+        });
+    };
+
+    const updateBatch = (itemIndex, batchIndex, field, value) => {
+        setReceiveItems(prev => {
+            const newItems = [...prev];
+            newItems[itemIndex].batches[batchIndex][field] = value;
             return newItems;
         });
     };
 
     const handleReceiveOrder = async () => {
-        if (!receiveItems.length) {
-            alert('No hay líneas para recibir.');
-            return;
+        if (!receiptData.document_number) return alert('Ingrese el Número de Documento.');
+
+        const batchesData = [];
+        for (const item of receiveItems) {
+            const receivedHist = Number(item.quantity_received || 0);
+            const pending = item.quantity - receivedHist;
+            let totalEntered = 0;
+            
+            for (const b of item.batches) {
+                if (b.entered_quantity || b.batch_number || b.expiry_date) {
+                    if (!b.entered_quantity || !b.batch_number || !b.expiry_date) {
+                        alert('Complete todos los campos del lote para el producto: ' + (item.product?.name || item.name));
+                        return;
+                    }
+                    totalEntered += Number(b.entered_quantity);
+                    batchesData.push({
+                        product_id: item.product_id,
+                        po_item_id: item.id,
+                        entered_quantity: Number(b.entered_quantity),
+                        unit_cost: item.unit_cost,
+                        batch_number: b.batch_number,
+                        expiry_date: b.expiry_date,
+                        conversion_factor: item.product?.conversion_factor || 1
+                    });
+                }
+            }
+            if (totalEntered > pending) {
+                alert(`La cantidad a ingresar (${totalEntered}) supera la cantidad pendiente (${pending}) para el producto: ${item.product?.name || item.name}`);
+                return;
+            }
         }
 
-        const invalid = receiveItems.some(item => !item.received_quantity || !item.batch_number || !item.expiry_date);
-        if (invalid) {
-            alert('Complete Cantidad Recibida, N° de Lote y Fecha de Vencimiento en todas las líneas.');
+        if (!batchesData.length) {
+            alert('No hay lotes ingresados para recibir.');
             return;
         }
 
         setSaving(true);
         try {
-            await receivePurchaseOrder(selectedOrder.id, receiveItems);
+            await receivePurchaseOrder(selectedOrder.id, batchesData, receiptData);
             alert('Recepción registrada correctamente.');
-            setShowReceiveModal(false);
-            setSelectedOrder(null);
-            setSelectedOrderItems([]);
-            setReceiveItems([]);
-            fetchInitialData();
+            openOrderDetail(selectedOrder);
         } catch (error) {
             console.error('Error recepcionando OC:', error);
             alert('Error al registrar la recepción: ' + error.message);
@@ -269,6 +314,163 @@ export default function OrdenesCompra() {
         );
     });
 
+    if (view === 'receive' && selectedOrder) {
+        return (
+            <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+                {/* Control Panel Superior */}
+                <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
+                    <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                        <span className="hover:text-gray-900 cursor-pointer" onClick={() => { setView('list'); fetchInitialData(); }}>Órdenes de Compra</span>
+                        <ChevronRight size={12} className="mx-1" />
+                        <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('detail')}>{formatPOReference(selectedOrder.po_number)}</span>
+                        <ChevronRight size={12} className="mx-1" />
+                        <span className="text-[#4C3073]">Recepción de Mercadería</span>
+                    </div>
+                    <div className="flex justify-between items-center mt-1">
+                        <div className="flex gap-2">
+                            <button onClick={() => setView('detail')} className="bg-white border border-gray-300 text-gray-600 hover:bg-gray-50 px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-2">
+                                <ArrowLeft size={16} /> Volver
+                            </button>
+                        </div>
+                        <div>
+                           <button onClick={handleReceiveOrder} disabled={saving} className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 disabled:opacity-50">
+                               <PackageCheck size={16} /> {saving ? 'Guardando...' : 'Confirmar Recepción'}
+                           </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-8">
+                    <div className="max-w-5xl mx-auto space-y-6">
+                        {modalLoading ? (
+                             <div className="flex items-center justify-center py-20">
+                                 <Loader2 className="animate-spin text-gray-400" size={32} />
+                             </div>
+                        ) : (
+                            <>
+                                <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-6 mb-6 flex justify-between items-start">
+                                    <div>
+                                        <h1 className="text-xl font-black text-[#4C3073] tracking-tight">Recepción para {formatPOReference(selectedOrder.po_number)}</h1>
+                                        <p className="text-gray-500 font-medium mt-1">{selectedOrder.supplier?.commercial_name || selectedOrder.supplier?.legal_name || 'Sin proveedor'}</p>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-x-10 gap-y-4 text-xs text-gray-600 mb-6 bg-white p-6 shadow-sm rounded-sm border border-gray-200">
+                                    <div className="grid grid-cols-3 items-center">
+                                        <label className="text-gray-500 font-bold text-[11px] text-right pr-4 uppercase tracking-tighter">Tipo Documento</label>
+                                        <select 
+                                            value={receiptData.document_type}
+                                            onChange={e => setReceiptData({...receiptData, document_type: e.target.value})}
+                                            className="col-span-2 w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                        >
+                                            <option value="GUIA_DESPACHO">Guía de Despacho</option>
+                                            <option value="FACTURA">Factura de Compra</option>
+                                            <option value="BOLETA">Boleta</option>
+                                        </select>
+                                    </div>
+                                    <div className="grid grid-cols-3 items-center">
+                                        <label className="text-gray-500 font-bold text-[11px] text-right pr-4 uppercase tracking-tighter">N° Documento</label>
+                                        <input 
+                                            type="text"
+                                            placeholder="Folio..."
+                                            value={receiptData.document_number}
+                                            onChange={e => setReceiptData({...receiptData, document_number: e.target.value.toUpperCase()})}
+                                            className="col-span-2 w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] font-bold italic text-[#4C3073]"
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-3 items-start col-span-2">
+                                        <label className="text-gray-500 font-bold text-[11px] text-right pr-4 pt-1 uppercase tracking-tighter">Observaciones</label>
+                                        <textarea 
+                                            rows="2"
+                                            value={receiptData.notes}
+                                            onChange={e => setReceiptData({...receiptData, notes: e.target.value})}
+                                            className="col-span-2 w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] resize-none"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="rounded-sm border border-gray-200 bg-white p-6 shadow-sm">
+                                    <h4 className="text-xs font-black uppercase tracking-[0.2em] text-gray-500 mb-4 border-b pb-2">Líneas de Recepción</h4>
+                                    <div className="space-y-4">
+                                        {receiveItems.map((item, idx) => {
+                                            const receivedHist = Number(item.quantity_received || 0);
+                                            const pending = item.quantity - receivedHist;
+                                            const uom = item.product?.purchase_uom || 'Unidad';
+
+                                            return (
+                                                <div key={idx} className="rounded-md border border-gray-100 bg-gray-50 p-4">
+                                                    <div className="mb-3 flex justify-between items-center border-b border-gray-200 pb-2">
+                                                        <div>
+                                                            <p className="text-sm font-bold text-gray-800">{item.product?.name || item.name}</p>
+                                                            <p className="text-xs text-gray-500">
+                                                                Pedida: <b>{item.quantity}</b> | Recibida: <b>{receivedHist}</b> | Pendiente: <b className="text-red-500">{pending}</b> | Costo: <b>${Number(item.unit_cost || 0).toLocaleString('es-CL')}</b>
+                                                            </p>
+                                                        </div>
+                                                        {pending > 0 && (
+                                                            <button onClick={() => addBatchToItem(idx)} className="text-xs bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 px-3 py-1 rounded font-bold uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                                                                <Plus size={14} /> Añadir Lote
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    
+                                                    {pending === 0 ? (
+                                                        <p className="text-xs text-emerald-600 font-bold uppercase tracking-wider bg-emerald-50 inline-block px-2 py-1 rounded">Línea completada</p>
+                                                    ) : (
+                                                        <div className="space-y-3 mt-4">
+                                                            {item.batches.map((batch, bIdx) => (
+                                                                <div key={bIdx} className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] items-end bg-white p-3 rounded-md border border-gray-200 shadow-sm relative">
+                                                                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
+                                                                        Cantidad a Ingresar
+                                                                        <span className="block text-[9px] text-[#4C3073] font-normal normal-case mb-1">Cantidad (en {uom})</span>
+                                                                        <input
+                                                                            type="number"
+                                                                            min="1"
+                                                                            value={batch.entered_quantity}
+                                                                            onChange={e => updateBatch(idx, bIdx, 'entered_quantity', e.target.value)}
+                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                                                            placeholder="Ej: 10"
+                                                                        />
+                                                                    </label>
+                                                                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
+                                                                        N° de Lote
+                                                                        <span className="block text-[9px] text-transparent mb-1">-</span>
+                                                                        <input
+                                                                            type="text"
+                                                                            value={batch.batch_number}
+                                                                            onChange={e => updateBatch(idx, bIdx, 'batch_number', e.target.value)}
+                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                                                            placeholder="Lote"
+                                                                        />
+                                                                    </label>
+                                                                    <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
+                                                                        Fecha de Vencimiento
+                                                                        <span className="block text-[9px] text-transparent mb-1">-</span>
+                                                                        <input
+                                                                            type="date"
+                                                                            value={batch.expiry_date}
+                                                                            onChange={e => updateBatch(idx, bIdx, 'expiry_date', e.target.value)}
+                                                                            className="w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                                                        />
+                                                                    </label>
+                                                                    <button onClick={() => removeBatchFromItem(idx, bIdx)} className="mb-2 text-gray-400 hover:text-red-500 p-1.5 bg-gray-50 rounded-full shadow-sm border border-gray-200 ml-2 transition-colors" title="Quitar Lote">
+                                                                        <X size={16} />
+                                                                    </button>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     if (view === 'list') {
         return (
             <div className="flex flex-col h-[calc(100vh-140px)] bg-white font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm">
@@ -320,7 +522,7 @@ export default function OrdenesCompra() {
                             </thead>
                             <tbody className="divide-y divide-gray-100 bg-white">
                                 {filteredOrders.map(po => (
-                                    <tr key={po.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onDoubleClick={() => openOrderModal(po)}>
+                                    <tr key={po.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onClick={() => openOrderDetail(po)}>
                                         <td className="px-4 py-4 font-bold text-[#4C3073]">{formatPOReference(po.po_number)}</td>
                                         <td className="px-4 py-4">
                                             <div className="flex items-center gap-2">
@@ -337,7 +539,7 @@ export default function OrdenesCompra() {
                                         </td>
                                         <td className="px-4 py-4 text-center">{getStatusBadge(po.status)}</td>
                                         <td className="px-4 py-4 text-center">
-                                            {po.status === 'PENDING' ? (
+                                            {po.status === 'PENDING' || po.status === 'PARTIAL' ? (
                                                 <button
                                                     type="button"
                                                     onClick={(e) => { e.stopPropagation(); openReceiveModal(po); }}
@@ -360,170 +562,151 @@ export default function OrdenesCompra() {
                         </table>
                     )}
                 </div>
-                {showOrderModal && selectedOrder && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
-                        <div className="w-full max-w-4xl overflow-hidden rounded-xl bg-white shadow-2xl border border-gray-200">
-                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-[#fafafa]">
-                                <div>
-                                    <h3 className="text-sm font-black uppercase tracking-[0.24em] text-[#4C3073]">Detalle OC</h3>
-                                    <p className="text-xs text-gray-500">Folio {formatPOReference(selectedOrder.po_number)}</p>
-                                </div>
-                                <button onClick={() => setShowOrderModal(false)} className="text-gray-500 hover:text-gray-900">Cerrar</button>
-                            </div>
-                            <div className="max-h-[80vh] overflow-y-auto p-6 space-y-4">
-                                {modalLoading ? (
-                                    <div className="flex items-center justify-center py-10">
-                                        <Loader2 className="animate-spin" size={22} />
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="grid grid-cols-2 gap-4 text-xs text-gray-600">
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Proveedor</span>
-                                                <p>{selectedOrder.supplier?.commercial_name || selectedOrder.supplier?.legal_name || 'Sin proveedor'}</p>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Estado</span>
-                                                <div>{getStatusBadge(selectedOrder.status)}</div>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Entrega Esperada</span>
-                                                <p>{new Date(selectedOrder.expected_delivery_date).toLocaleDateString()}</p>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Condición de Pago</span>
-                                                <p>{selectedOrder.payment_terms_days} días</p>
-                                            </div>
-                                            <div className="md:col-span-2 space-y-1">
-                                                <span className="font-bold text-gray-700">Observaciones</span>
-                                                <p className="text-sm text-gray-700">{selectedOrder.observation_notes || 'Sin observaciones'}</p>
-                                            </div>
-                                        </div>
+            </div>
+        );
+    }
 
-                                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                                            <h4 className="text-xs font-black uppercase tracking-[0.2em] text-gray-500 mb-3">Medicamentos</h4>
-                                            <table className="w-full text-left text-xs border-collapse">
-                                                <thead className="bg-white border-b border-gray-200">
-                                                    <tr>
-                                                        <th className="px-3 py-2 text-gray-500 uppercase tracking-wider">Medicamento</th>
-                                                        <th className="px-3 py-2 text-right text-gray-500 uppercase tracking-wider">Cantidad</th>
-                                                        <th className="px-3 py-2 text-right text-gray-500 uppercase tracking-wider">Costo Unit.</th>
-                                                        <th className="px-3 py-2 text-right text-gray-500 uppercase tracking-wider">Total</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-gray-100">
-                                                    {selectedOrderItems.map((item, idx) => (
-                                                        <tr key={idx}>
-                                                            <td className="px-3 py-3 text-sm font-semibold text-gray-700">{item.product?.name || item.name}</td>
-                                                            <td className="px-3 py-3 text-right text-gray-700">{item.quantity}</td>
-                                                            <td className="px-3 py-3 text-right text-gray-700">${Number(item.unit_cost).toLocaleString('es-CL')}</td>
-                                                            <td className="px-3 py-3 text-right text-[#4C3073] font-black">${Number(item.quantity * item.unit_cost).toLocaleString('es-CL')}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </>
-                                )}
+    if (view === 'detail' && selectedOrder) {
+        return (
+            <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+                {/* Control Panel Superior */}
+                <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
+                    <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                        <span className="hover:text-gray-900 cursor-pointer" onClick={() => { setView('list'); fetchInitialData(); }}>Órdenes de Compra</span>
+                        <ChevronRight size={12} className="mx-1" />
+                        <span className="text-[#4C3073]">{formatPOReference(selectedOrder.po_number)}</span>
+                    </div>
+                    <div className="flex justify-between items-center mt-1">
+                        <div className="flex gap-2">
+                            {(selectedOrder.status === 'PENDING' || selectedOrder.status === 'PARTIAL') && (
+                                <button onClick={() => openReceiveModal(selectedOrder)} className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center gap-2">
+                                    <Truck size={16} /> Recibir Mercadería
+                                </button>
+                            )}
+                            <button onClick={() => { setView('list'); fetchInitialData(); }} className="bg-white border border-gray-300 text-gray-600 hover:bg-gray-50 px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-2">
+                                <ArrowLeft size={16} /> Volver
+                            </button>
+                        </div>
+                        <div>{getStatusBadge(selectedOrder.status)}</div>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-8">
+                    <div className="max-w-6xl mx-auto space-y-6">
+                        
+                        {/* Cabecera */}
+                        <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-8 flex justify-between items-start">
+                            <div>
+                                <h1 className="text-2xl font-black text-[#4C3073] tracking-tight">{formatPOReference(selectedOrder.po_number)}</h1>
+                                <p className="text-gray-500 font-medium mt-1">{selectedOrder.supplier?.commercial_name || selectedOrder.supplier?.legal_name || 'Sin proveedor'}</p>
+                            </div>
+                            <div className="text-right text-xs space-y-1">
+                                <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Fecha Emisión:</span> <span className="font-mono">{new Date(selectedOrder.created_at).toLocaleDateString()}</span></p>
+                                <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Entrega Esperada:</span> <span className="font-mono">{new Date(selectedOrder.expected_delivery_date).toLocaleDateString()}</span></p>
+                                <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Condición Pago:</span> <span className="font-mono">{selectedOrder.payment_terms_days} días</span></p>
+                            </div>
+                        </div>
+
+                        {/* Recepciones (Inventory Receipts) */}
+                        {orderReceipts.length > 0 && (
+                            <div className="bg-white border border-gray-200 shadow-sm rounded-sm overflow-hidden">
+                                <div className="bg-gray-50 border-b border-gray-200 px-6 py-3">
+                                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Documentos de Recepción</h3>
+                                </div>
+                                <table className="w-full text-left text-xs border-collapse">
+                                    <thead className="border-b border-gray-100 text-[10px] uppercase tracking-widest text-gray-400 font-bold">
+                                        <tr>
+                                            <th className="px-6 py-3">Tipo</th>
+                                            <th className="px-6 py-3">N° Documento</th>
+                                            <th className="px-6 py-3">Fecha</th>
+                                            <th className="px-6 py-3">Notas</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-50">
+                                        {orderReceipts.map(r => (
+                                            <tr key={r.id} className="hover:bg-gray-50/50">
+                                                <td className="px-6 py-3">
+                                                    <span className={`inline-flex px-2 py-0.5 rounded-sm text-[9px] font-black border uppercase ${
+                                                        r.document_type === 'FACTURA' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-purple-50 text-purple-700 border-purple-200'
+                                                    }`}>
+                                                        {r.document_type === 'FACTURA' ? 'Factura' : r.document_type === 'GUIA_DESPACHO' ? 'Guía Despacho' : r.document_type}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-3 font-mono font-bold text-[#4C3073]">{r.document_number}</td>
+                                                <td className="px-6 py-3 font-mono text-gray-500">{new Date(r.received_date || r.created_at).toLocaleDateString()}</td>
+                                                <td className="px-6 py-3 text-gray-400 italic truncate max-w-xs">{r.notes || '—'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+
+                        {/* Detalle de Productos */}
+                        <div className="bg-white border border-gray-200 shadow-sm rounded-sm overflow-hidden">
+                            <div className="bg-gray-50 border-b border-gray-200 px-6 py-3">
+                                <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Detalle de Productos</h3>
+                            </div>
+                            <table className="w-full text-left text-xs border-collapse">
+                                <thead className="border-b border-gray-100 text-[10px] uppercase tracking-widest text-gray-400 font-bold">
+                                    <tr>
+                                        <th className="px-6 py-3">Producto</th>
+                                        <th className="px-6 py-3 text-right">Pedido</th>
+                                        <th className="px-6 py-3 text-right">Recibido</th>
+                                        <th className="px-6 py-3 text-right">Costo Unit.</th>
+                                        <th className="px-6 py-3 text-right">Subtotal</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-50">
+                                    {selectedOrderItems.map(item => {
+                                        const isComplete = Number(item.quantity_received || 0) >= Number(item.quantity);
+                                        return (
+                                            <tr key={item.id} className="hover:bg-gray-50/50">
+                                                <td className="px-6 py-4 font-bold text-gray-800 uppercase tracking-tight">
+                                                    {item.product?.name || item.name}
+                                                    {item.product?.barcode && <span className="block text-[9px] font-normal text-gray-400 mt-0.5 font-mono">SKU: {item.product.barcode}</span>}
+                                                </td>
+                                                <td className="px-6 py-4 text-right font-mono text-gray-600">{item.quantity}</td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <span className={`font-mono font-bold ${isComplete ? 'text-green-600' : 'text-gray-400'}`}>
+                                                        {item.quantity_received || 0}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 text-right font-mono text-gray-600">${Number(item.unit_cost).toLocaleString('es-CL')}</td>
+                                                <td className="px-6 py-4 text-right font-mono font-black text-[#4C3073]">${(Number(item.quantity_received || 0) * Number(item.unit_cost)).toLocaleString('es-CL')}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                            <div className="bg-gray-50 p-6 flex justify-end border-t border-gray-200">
+                                <div className="w-64 space-y-2">
+                                    {(() => {
+                                        const receivedSubtotal = selectedOrderItems.reduce((sum, l) => sum + (Number(l.quantity_received || 0) * Number(l.unit_cost)), 0);
+                                        const receivedTax = receivedSubtotal * 0.19;
+                                        const receivedTotal = receivedSubtotal + receivedTax;
+                                        return (
+                                            <>
+                                                <div className="flex justify-between text-[11px] font-bold text-gray-400 uppercase tracking-widest">
+                                                    <span>Subtotal Neto:</span>
+                                                    <span className="text-gray-700 font-mono">${receivedSubtotal.toLocaleString('es-CL')}</span>
+                                                </div>
+                                                <div className="flex justify-between text-[11px] font-bold text-gray-400 uppercase tracking-widest">
+                                                    <span>IVA (19%):</span>
+                                                    <span className="text-gray-700 font-mono">${receivedTax.toLocaleString('es-CL')}</span>
+                                                </div>
+                                                <div className="flex justify-between pt-3 mt-3 border-t border-gray-300">
+                                                    <span className="text-[11px] font-black text-gray-900 uppercase tracking-widest">Total Recibido:</span>
+                                                    <span className="text-lg font-black text-[#4C3073] font-mono">${receivedTotal.toLocaleString('es-CL')}</span>
+                                                </div>
+                                            </>
+                                        );
+                                    })()}
+                                </div>
                             </div>
                         </div>
                     </div>
-                )}
-                {showReceiveModal && selectedOrder && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
-                        <div className="w-full max-w-5xl overflow-hidden rounded-xl bg-white shadow-2xl border border-gray-200">
-                            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-[#fafafa]">
-                                <div>
-                                    <h3 className="text-sm font-black uppercase tracking-[0.24em] text-[#4C3073]">Recepción de Mercadería</h3>
-                                    <p className="text-xs text-gray-500">OC {formatPOReference(selectedOrder.po_number)}</p>
-                                </div>
-                                <button onClick={() => setShowReceiveModal(false)} className="text-gray-500 hover:text-gray-900">Cerrar</button>
-                            </div>
-                            <div className="max-h-[80vh] overflow-y-auto p-6 space-y-4">
-                                {modalLoading ? (
-                                    <div className="flex items-center justify-center py-10">
-                                        <Loader2 className="animate-spin" size={22} />
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="grid grid-cols-2 gap-4 text-xs text-gray-600">
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Proveedor</span>
-                                                <p>{selectedOrder.supplier?.commercial_name || selectedOrder.supplier?.legal_name || 'Sin proveedor'}</p>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Fecha Entrega</span>
-                                                <p>{new Date(selectedOrder.expected_delivery_date).toLocaleDateString()}</p>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Condición de Pago</span>
-                                                <p>{selectedOrder.payment_terms_days} días</p>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <span className="font-bold text-gray-700">Estado</span>
-                                                <div>{getStatusBadge(selectedOrder.status)}</div>
-                                            </div>
-                                        </div>
-
-                                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                                            <h4 className="text-xs font-black uppercase tracking-[0.2em] text-gray-500 mb-3">Líneas de Recepción</h4>
-                                            <div className="space-y-4">
-                                                {receiveItems.map((item, idx) => (
-                                                    <div key={idx} className="rounded-lg border border-gray-200 bg-white p-4">
-                                                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                                            <div>
-                                                                <p className="text-sm font-semibold text-gray-800">{item.product?.name || item.name}</p>
-                                                                <p className="text-xs text-gray-500">Cantidad Pedida: {item.quantity}</p>
-                                                            </div>
-                                                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 w-full max-w-xl">
-                                                                <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
-                                                                    Cantidad Recibida
-                                                                    <input
-                                                                        type="number"
-                                                                        min="1"
-                                                                        value={item.received_quantity}
-                                                                        onChange={e => updateReceiveItem(idx, 'received_quantity', Number(e.target.value))}
-                                                                        className="mt-1 w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
-                                                                    />
-                                                                </label>
-                                                                <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
-                                                                    N° de Lote
-                                                                    <input
-                                                                        type="text"
-                                                                        value={item.batch_number}
-                                                                        onChange={e => updateReceiveItem(idx, 'batch_number', e.target.value)}
-                                                                        className="mt-1 w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
-                                                                    />
-                                                                </label>
-                                                                <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
-                                                                    Fecha de Vencimiento
-                                                                    <input
-                                                                        type="date"
-                                                                        value={item.expiry_date}
-                                                                        onChange={e => updateReceiveItem(idx, 'expiry_date', e.target.value)}
-                                                                        className="mt-1 w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
-                                                                    />
-                                                                </label>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        <div className="flex justify-end gap-3">
-                                            <button onClick={() => setShowReceiveModal(false)} className="rounded-sm border border-gray-300 bg-white px-5 py-2 text-sm font-bold uppercase tracking-wider text-gray-600 hover:bg-gray-50 transition">
-                                                Cancelar
-                                            </button>
-                                            <button onClick={handleReceiveOrder} disabled={saving} className="rounded-sm bg-[#4C3073] px-5 py-2 text-sm font-bold uppercase tracking-wider text-white hover:bg-[#3d265c] transition disabled:opacity-50">
-                                                {saving ? 'Guardando...' : 'Confirmar Recepción'}
-                                            </button>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                )}
+                </div>
             </div>
         );
     }

@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
+import { ChevronRight, ArrowLeft, Save, Building2, Search } from 'lucide-react';
 import { getPharmacySchema, getMyCompanyId, getCurrentUserId } from '../../../farmacia/api/pharmacyClient';
 
 export default function ProveedoresMedicos() {
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [showModal, setShowModal] = useState(false);
+  const [view, setView] = useState('list');
   const [activeTab, setActiveTab] = useState('legal');
+  const [searchTerm, setSearchTerm] = useState('');
 
   const emptyForm = {
     id: null,
@@ -61,7 +63,7 @@ export default function ProveedoresMedicos() {
   const openCreate = () => {
     setForm(emptyForm);
     setActiveTab('legal');
-    setShowModal(true);
+    setView('form');
   };
 
   const handleEdit = (row) => {
@@ -92,8 +94,7 @@ export default function ProveedoresMedicos() {
       observation_notes: (row.observation_notes || '').toUpperCase()
     });
     setActiveTab('legal');
-    setShowModal(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setView('form');
   };
 
   const handleDelete = async (id) => {
@@ -282,7 +283,7 @@ export default function ProveedoresMedicos() {
         alert('Proveedor creado');
       }
 
-      setShowModal(false);
+      setView('list');
       await fetchList();
     } catch (err) {
       console.error(err);
@@ -292,190 +293,238 @@ export default function ProveedoresMedicos() {
     }
   };
 
+  if (view === 'form') {
+    return (
+      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+        <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
+            <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('list')}>Proveedores Médicos</span>
+                <ChevronRight size={12} className="mx-1" />
+                <span className="text-[#4C3073]">{form.id ? `Editar Proveedor #${form.id}` : 'Nuevo Proveedor'}</span>
+            </div>
+            <div className="flex justify-between items-center mt-1">
+                <div className="flex gap-2">
+                    <button onClick={() => setView('list')} className="bg-white border border-gray-300 text-gray-600 hover:bg-gray-50 px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-2">
+                        <ArrowLeft size={16} /> Cancelar y Volver
+                    </button>
+                </div>
+                <div>
+                   <button onClick={handleSave} disabled={loading} className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 disabled:opacity-50">
+                       <Save size={16} /> {loading ? 'Guardando...' : 'Guardar Proveedor'}
+                   </button>
+                </div>
+            </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-8">
+            <div className="max-w-5xl mx-auto space-y-6">
+                <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-6 flex justify-between items-start">
+                    <div>
+                        <h1 className="text-xl font-black text-[#4C3073] tracking-tight flex items-center gap-2">
+                            <Building2 size={24} /> {form.id ? 'Editar Proveedor' : 'Nuevo Proveedor'}
+                        </h1>
+                        <p className="text-gray-500 font-medium mt-1">Complete los datos en las pestañas correspondientes</p>
+                    </div>
+                </div>
+
+                <div className="bg-white border border-gray-200 rounded-sm shadow-sm">
+                    <div className="border-b border-gray-200 px-6 pt-4">
+                        <nav className="flex gap-4">
+                            <button onClick={() => setActiveTab('legal')} className={`pb-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${activeTab === 'legal' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Datos Legales</button>
+                            <button onClick={() => setActiveTab('contact')} className={`pb-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${activeTab === 'contact' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Contacto / Ubicación</button>
+                            <button onClick={() => setActiveTab('commercial')} className={`pb-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${activeTab === 'commercial' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Configuración Comercial</button>
+                        </nav>
+                    </div>
+
+                    <div className="p-8">
+                        <form onSubmit={handleSave}>
+                            {activeTab === 'legal' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">RUT</label>
+                                        <input required placeholder="RUT (XX.XXX.XXX-X)" value={form.rut} onChange={e => onRutChange(e.target.value)} onBlur={onRutBlur} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Razón Social</label>
+                                        <input required placeholder="Razón Social" value={form.legal_name} onChange={e => setUpper('legal_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Nombre de Fantasía</label>
+                                        <input placeholder="Nombre de Fantasía" value={form.commercial_name} onChange={e => setUpper('commercial_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Representante Legal</label>
+                                        <input placeholder="Representante Legal" value={form.legal_representative} onChange={e => setUpper('legal_representative', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Resolución ISP</label>
+                                        <input placeholder="Resolución ISP" value={form.isp_resolution_number} onChange={e => setUpper('isp_resolution_number', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Giro / Línea de negocio</label>
+                                        <input placeholder="Giro / Línea de negocio" value={form.business_line} onChange={e => setUpper('business_line', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'contact' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Dirección (calle)</label>
+                                        <input placeholder="Dirección (calle)" value={form.address} onChange={e => setUpper('address', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Comuna</label>
+                                            <input placeholder="Comuna" value={form.address_commune} onChange={e => setUpper('address_commune', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Ciudad</label>
+                                            <input placeholder="Ciudad" value={form.address_city} onChange={e => setUpper('address_city', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Contacto Operativo (Nombre)</label>
+                                        <input placeholder="Contacto Operativo (Nombre)" value={form.contact_person_name} onChange={e => setUpper('contact_person_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Cargo contacto</label>
+                                        <input placeholder="Cargo contacto" value={form.contact_person_role} onChange={e => setUpper('contact_person_role', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Email</label>
+                                        <input placeholder="Email" type="email" value={form.contact_email} onChange={e => setLower('contact_email', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Teléfono</label>
+                                        <input placeholder="Teléfono" value={form.contact_phone} onChange={e => setForm({...form, contact_phone: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Website URL</label>
+                                        <input placeholder="Website URL" value={form.website_url} onChange={e => setLower('website_url', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div className="col-span-1 sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-6 pt-4 border-t border-gray-100">
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Instagram URL</label>
+                                            <input placeholder="Instagram URL" value={form.instagram_url} onChange={e => setLower('instagram_url', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">LinkedIn URL</label>
+                                            <input placeholder="LinkedIn URL" value={form.linkedin_url} onChange={e => setLower('linkedin_url', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Twitter URL</label>
+                                            <input placeholder="Twitter URL" value={form.twitter_url} onChange={e => setLower('twitter_url', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'commercial' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Días de Crédito</label>
+                                        <input aria-label="payment_terms_days" placeholder="Ej: 30" type="number" value={form.payment_terms_days} onChange={e => setForm({...form, payment_terms_days: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div className="col-span-1 sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4 border-t border-gray-100">
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Banco</label>
+                                            <input placeholder="Banco" value={form.bank_name} onChange={e => setUpper('bank_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Tipo de Cuenta</label>
+                                            <input placeholder="Tipo de Cuenta" value={form.account_type} onChange={e => setUpper('account_type', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">N° de Cuenta</label>
+                                            <input placeholder="N° de Cuenta" value={form.account_number} onChange={e => setForm({...form, account_number: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Email de Pago</label>
+                                            <input placeholder="Email de Pago" type="email" value={form.payment_email} onChange={e => setLower('payment_email', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                    </div>
+                                    <div className="col-span-1 sm:col-span-2 pt-4 border-t border-gray-100">
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Notas de Observación</label>
+                                        <textarea rows="3" placeholder="Observaciones..." value={form.observation_notes} onChange={e => setUpper('observation_notes', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none resize-none" />
+                                    </div>
+                                </div>
+                            )}
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+      </div>
+    );
+  }
+
+  const filteredSuppliers = suppliers.filter(s => 
+    (s.legal_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (s.commercial_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (s.rut || '').includes(searchTerm)
+  );
+
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-black text-[#4C3073]">Mantenedor: Proveedores Médicos (Ficha 360°)</h2>
-        <div className="flex items-center gap-2">
-          <button onClick={openCreate} className="bg-[#4C3073] text-white px-4 py-2 rounded-sm">Nuevo Proveedor</button>
+    <div className="flex flex-col h-[calc(100vh-140px)] bg-white font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm">
+      <div className="border-b border-gray-200 px-4 py-2 bg-white flex flex-col gap-2 shrink-0">
+        <div className="flex items-center text-[11px] text-gray-500 uppercase tracking-widest font-bold">
+          <span>Farmacia</span>
+          <ChevronRight size={12} className="mx-1" />
+          <span className="text-gray-900">Proveedores Médicos</span>
+        </div>
+        <div className="flex justify-between items-center mt-1">
+          <div className="flex gap-2">
+            <button 
+              onClick={openCreate} 
+              className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-1.5 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm active:scale-95"
+            >
+              Nuevo Proveedor
+            </button>
+          </div>
+          <div className="relative w-72">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input 
+              type="text" 
+              placeholder="Buscar proveedores..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full rounded-sm border-gray-300 border pl-8 pr-3 py-1.5 text-xs focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none transition-all" 
+            />
+          </div>
         </div>
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-sm overflow-hidden">
-        <div className="p-4 border-b">Listado de proveedores {loading && '...'} </div>
-        <table className="w-full text-sm">
-          <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+      <div className="flex-1 overflow-auto bg-gray-50/30">
+        <table className="w-full text-left border-collapse">
+          <thead className="bg-[#f8f9fa] border-b border-gray-200 sticky top-0 z-10">
             <tr>
-              <th className="p-3 text-left">RUT</th>
-              <th className="p-3 text-left">Razón Social</th>
-              <th className="p-3 text-left">Contacto Operativo</th>
-              <th className="p-3 text-left">Rigor Comercial (días)</th>
-              <th className="p-3 text-right">Acciones</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">RUT</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Razón Social</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Contacto Operativo</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Rigor Comercial (días)</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-right">Acciones</th>
             </tr>
           </thead>
-          <tbody>
-            {suppliers.map(s => (
-              <tr key={s.id} className="border-t">
-                <td className="p-3">{s.rut}</td>
-                <td className="p-3">{s.legal_name}</td>
-                <td className="p-3">{s.contact_person_name || '—'}</td>
-                <td className="p-3">{s.payment_terms_days ?? '—'}</td>
-                <td className="p-3 text-right">
-                  <button onClick={() => handleEdit(s)} className="text-sm text-[#4C3073] mr-3">Editar</button>
-                  <button onClick={() => handleDelete(s.id)} className="text-sm text-red-500">Eliminar</button>
+          <tbody className="divide-y divide-gray-100 bg-white">
+            {filteredSuppliers.map(s => (
+              <tr key={s.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onClick={() => handleEdit(s)}>
+                <td className="px-4 py-4 font-bold text-[#4C3073]">{s.rut}</td>
+                <td className="px-4 py-4 font-semibold">{s.legal_name}</td>
+                <td className="px-4 py-4 text-gray-500">{s.contact_person_name || '—'}</td>
+                <td className="px-4 py-4 text-gray-500">{s.payment_terms_days ?? '—'}</td>
+                <td className="px-4 py-4 text-right">
+                  <button onClick={(e) => { e.stopPropagation(); handleEdit(s); }} className="text-[11px] font-bold text-[#4C3073] mr-3 uppercase tracking-wider">Editar</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleDelete(s.id); }} className="text-[11px] font-bold text-red-500 uppercase tracking-wider">Eliminar</button>
                 </td>
               </tr>
             ))}
-            {suppliers.length === 0 && !loading && (
-              <tr><td colSpan={5} className="p-4 text-center text-gray-500">Sin proveedores</td></tr>
+            {filteredSuppliers.length === 0 && !loading && (
+              <tr><td colSpan={5} className="p-8 text-center text-gray-500">Sin proveedores</td></tr>
             )}
           </tbody>
         </table>
       </div>
-
-      {/* Modal / Panel */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center p-8">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowModal(false)}></div>
-          <div className="relative bg-white w-full max-w-4xl rounded-lg shadow-lg z-10 overflow-hidden">
-            <div className="p-4 border-b flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-bold">Ficha Proveedor {form.id ? `#${form.id}` : ''}</h3>
-                <p className="text-sm text-gray-500">Edite los datos del proveedor en pestañas</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { setShowModal(false); }} className="px-3 py-1 border rounded">Cancelar</button>
-                <button onClick={handleSave} className="bg-[#4C3073] text-white px-4 py-1 rounded">Guardar</button>
-              </div>
-            </div>
-
-            <div className="p-6">
-              <div className="mb-4">
-                <nav className="flex gap-2">
-                  <button onClick={() => setActiveTab('legal')} className={`px-3 py-2 rounded-t ${activeTab === 'legal' ? 'bg-[#f3eafd] text-[#4C3073] font-bold' : 'bg-gray-100'}`}>Datos Legales</button>
-                  <button onClick={() => setActiveTab('contact')} className={`px-3 py-2 rounded-t ${activeTab === 'contact' ? 'bg-[#f3eafd] text-[#4C3073] font-bold' : 'bg-gray-100'}`}>Contacto / Ubicación</button>
-                  <button onClick={() => setActiveTab('commercial')} className={`px-3 py-2 rounded-t ${activeTab === 'commercial' ? 'bg-[#f3eafd] text-[#4C3073] font-bold' : 'bg-gray-100'}`}>Configuración Comercial</button>
-                </nav>
-              </div>
-
-              <form onSubmit={handleSave}>
-                <div>
-                  {activeTab === 'legal' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">RUT</label>
-                        <input required placeholder="RUT (XX.XXX.XXX-X)" value={form.rut} onChange={e => onRutChange(e.target.value)} onBlur={onRutBlur} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Razón Social</label>
-                        <input required placeholder="Razón Social" value={form.legal_name} onChange={e => setUpper('legal_name', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Nombre de Fantasía</label>
-                        <input placeholder="Nombre de Fantasía" value={form.commercial_name} onChange={e => setUpper('commercial_name', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Representante Legal</label>
-                        <input placeholder="Representante Legal" value={form.legal_representative} onChange={e => setUpper('legal_representative', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Resolución ISP</label>
-                        <input placeholder="Resolución ISP" value={form.isp_resolution_number} onChange={e => setUpper('isp_resolution_number', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Giro / Línea de negocio</label>
-                        <input placeholder="Giro / Línea de negocio" value={form.business_line} onChange={e => setUpper('business_line', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                    </div>
-                  )}
-
-                  {activeTab === 'contact' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Dirección (calle)</label>
-                        <input placeholder="Dirección (calle)" value={form.address} onChange={e => setUpper('address', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Comuna</label>
-                        <input placeholder="Comuna" value={form.address_commune} onChange={e => setUpper('address_commune', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Ciudad</label>
-                        <input placeholder="Ciudad" value={form.address_city} onChange={e => setUpper('address_city', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Contacto Operativo (Nombre)</label>
-                        <input placeholder="Contacto Operativo (Nombre)" value={form.contact_person_name} onChange={e => setUpper('contact_person_name', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Cargo contacto</label>
-                        <input placeholder="Cargo contacto" value={form.contact_person_role} onChange={e => setUpper('contact_person_role', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Email</label>
-                        <input placeholder="Email" type="email" value={form.contact_email} onChange={e => setLower('contact_email', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Teléfono</label>
-                        <input placeholder="Teléfono" value={form.contact_phone} onChange={e => setForm({...form, contact_phone: e.target.value})} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Website URL</label>
-                        <input placeholder="Website URL" value={form.website_url} onChange={e => setLower('website_url', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div className="col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div>
-                          <label className="text-[12px] font-bold text-gray-600 mb-1 block">Instagram URL</label>
-                          <input placeholder="Instagram URL" value={form.instagram_url} onChange={e => setLower('instagram_url', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                        </div>
-                        <div>
-                          <label className="text-[12px] font-bold text-gray-600 mb-1 block">LinkedIn URL</label>
-                          <input placeholder="LinkedIn URL" value={form.linkedin_url} onChange={e => setLower('linkedin_url', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                        </div>
-                        <div>
-                          <label className="text-[12px] font-bold text-gray-600 mb-1 block">Twitter URL</label>
-                          <input placeholder="Twitter URL" value={form.twitter_url} onChange={e => setLower('twitter_url', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {activeTab === 'commercial' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Días de Crédito (Ej: 30)</label>
-                        <input aria-label="payment_terms_days" placeholder="Términos de pago (días)" type="number" value={form.payment_terms_days} onChange={e => setForm({...form, payment_terms_days: e.target.value})} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                      <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="text-[12px] font-bold text-gray-600 mb-1 block">Banco</label>
-                          <input placeholder="Banco" value={form.bank_name} onChange={e => setUpper('bank_name', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                        </div>
-                        <div>
-                          <label className="text-[12px] font-bold text-gray-600 mb-1 block">Tipo de Cuenta</label>
-                          <input placeholder="Tipo de Cuenta" value={form.account_type} onChange={e => setUpper('account_type', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                        </div>
-                        <div>
-                          <label className="text-[12px] font-bold text-gray-600 mb-1 block">N° de Cuenta</label>
-                          <input placeholder="N° de Cuenta" value={form.account_number} onChange={e => setForm({...form, account_number: e.target.value})} className="border px-3 py-2 rounded-sm w-full" />
-                        </div>
-                        <div>
-                          <label className="text-[12px] font-bold text-gray-600 mb-1 block">Email de Pago</label>
-                          <input placeholder="Email de Pago" type="email" value={form.payment_email} onChange={e => setLower('payment_email', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                        </div>
-                      </div>
-                      <div className="col-span-2">
-                        <label className="text-[12px] font-bold text-gray-600 mb-1 block">Notas de Observación</label>
-                        <textarea placeholder="Observaciones" value={form.observation_notes} onChange={e => setUpper('observation_notes', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

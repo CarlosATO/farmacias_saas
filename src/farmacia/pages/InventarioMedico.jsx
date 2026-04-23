@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Pill, Search, ShieldAlert, BadgeInfo } from 'lucide-react';
+import { Pill, Search, ShieldAlert, ChevronRight, BadgeInfo } from 'lucide-react';
 import { fetchPharmacyProducts } from '../api/pharmacyClient';
 import { supabase } from '../../api/supabaseClient';
 
@@ -66,118 +66,107 @@ export default function InventarioMedico() {
   };
 
   return (
-    <div className="animate-in fade-in duration-300 h-full flex flex-col">
-      {/* Header & Filters */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
-        <div>
-          <div className="flex items-center gap-3 text-emerald-700 mb-1">
-            <Pill size={28} className="stroke-[2.5px]" />
-            <h1 className="text-2xl font-black tracking-tight">Inventario Médico (ISP)</h1>
-          </div>
-          <p className="text-slate-500 text-sm md:ml-10">Gestión de maestro de medicamentos y niveles de existencias.</p>
+    <div className="flex flex-col h-[calc(100vh-140px)] bg-white font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm">
+      <div className="border-b border-gray-200 px-4 py-2 bg-white flex flex-col gap-2 shrink-0">
+        <div className="flex items-center text-[11px] text-gray-500 uppercase tracking-widest font-bold">
+          <span>Farmacia</span>
+          <ChevronRight size={12} className="mx-1" />
+          <span className="text-gray-900">Inventario Médico (ISP)</span>
         </div>
-
-        <div className="relative w-full md:w-80">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search size={16} className="text-slate-400" />
+        <div className="flex justify-between items-center mt-1">
+          <div className="flex gap-2">
+            {/* Buttons space if needed */}
           </div>
-          <input
-            type="text"
-            className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 shadow-sm transition-all"
-            placeholder="Buscar por Nombre o DCI..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+          <div className="relative w-72">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input 
+              type="text" 
+              placeholder="Buscar por Nombre o DCI..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full rounded-sm border-gray-300 border pl-8 pr-3 py-1.5 text-xs focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none transition-all" 
+            />
+          </div>
         </div>
       </div>
 
-      {/* Data Grid */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1 overflow-hidden flex flex-col">
-        <div className="overflow-x-auto flex-1">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
+      <div className="flex-1 overflow-auto bg-gray-50/30">
+        <table className="w-full text-left border-collapse">
+          <thead className="bg-[#f8f9fa] border-b border-gray-200 sticky top-0 z-10">
+            <tr>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Producto</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">DCI (Principio Activo)</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Reg. ISP</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-center">Bioequivalente</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Condición Venta</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-right">Stock</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 bg-white">
+            {loading ? (
               <tr>
-                <th className="px-6 py-4 font-bold text-slate-600 uppercase tracking-wider text-[11px]">Producto</th>
-                <th className="px-6 py-4 font-bold text-slate-600 uppercase tracking-wider text-[11px]">DCI (Principio Activo)</th>
-                <th className="px-6 py-4 font-bold text-slate-600 uppercase tracking-wider text-[11px]">Reg. ISP</th>
-                <th className="px-6 py-4 font-bold text-slate-600 uppercase tracking-wider text-[11px] text-center">Bioequivalente</th>
-                <th className="px-6 py-4 font-bold text-slate-600 uppercase tracking-wider text-[11px]">Condición Venta</th>
-                <th className="px-6 py-4 font-bold text-slate-600 uppercase tracking-wider text-[11px] text-right">Stock</th>
+                <td colSpan="6" className="px-6 py-20 text-center">
+                  <div className="flex flex-col items-center justify-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#4C3073] mb-4"></div>
+                    <p className="text-gray-500 font-medium">Cargando inventario...</p>
+                  </div>
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td colSpan="6" className="px-6 py-20 text-center">
-                    <div className="flex flex-col items-center justify-center">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600 mb-4"></div>
-                      <p className="text-slate-500 font-medium">Cargando catálogo del inventario...</p>
-                    </div>
-                  </td>
-                </tr>
-              ) : filteredProducts.length === 0 ? (
-                <tr>
-                  <td colSpan="6" className="px-6 py-20 text-center">
-                    <div className="flex flex-col items-center justify-center text-slate-400">
-                      <ShieldAlert size={48} className="mb-4 opacity-50" />
-                      <p className="text-lg font-bold text-slate-600">No se encontraron medicamentos</p>
-                      <p className="text-sm mt-1">Ajusta los términos de búsqueda o revisa la base de datos.</p>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                filteredProducts.map((product) => (
-                  <tr key={product.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="px-6 py-4">
-                      <div>
-                        <p className="font-bold text-slate-800">{product.name}</p>
-                        {(product.concentration || product.dosage) && (
-                          <p className="text-xs text-slate-500 mt-0.5">{product.concentration || product.dosage}</p>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-slate-600">{product.dci || product.active_principle || '-'}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="font-mono text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded">{product.isp_registry || product.registry_number || '-'}</span>
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      {product.is_bioequivalent ? (
-                        <div className="flex justify-center" title="Medicamento Bioequivalente">
-                           <div className="bg-yellow-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded border border-yellow-500 shadow-sm inline-flex items-center justify-center h-5">
-                             <span>BIO</span>
-                           </div>
-                        </div>
-                      ) : (
-                        <span className="text-slate-300">-</span>
+            ) : filteredProducts.length === 0 ? (
+              <tr>
+                <td colSpan="6" className="px-6 py-20 text-center">
+                  <div className="flex flex-col items-center justify-center text-gray-400">
+                    <ShieldAlert size={48} className="mb-4 opacity-50" />
+                    <p className="text-lg font-bold text-gray-600">No se encontraron medicamentos</p>
+                    <p className="text-sm mt-1">Ajusta los términos de búsqueda.</p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              filteredProducts.map((product) => (
+                <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-4">
+                    <div>
+                      <p className="font-bold text-[#4C3073]">{product.name}</p>
+                      {(product.concentration || product.dosage) && (
+                        <p className="text-xs text-gray-500 mt-0.5">{product.concentration || product.dosage}</p>
                       )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {getSaleConditionBadge(product.sale_condition)}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <span className={`font-bold text-base ${
-                        (product.stock || product.stock_quantity || 0) <= 0 
-                          ? 'text-red-500' 
-                          : 'text-emerald-600'
-                      }`}>
-                        {product.stock || product.stock_quantity || 0}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Footer info - record count */}
-        {!loading && products.length > 0 && (
-          <div className="bg-slate-50 border-t border-slate-200 px-6 py-3 flex items-center justify-between text-xs text-slate-500">
-            <p>Mostrando <span className="font-bold text-slate-700">{filteredProducts.length}</span> producto(s).</p>
-          </div>
-        )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-4 font-semibold text-gray-700">
+                    {product.dci || product.active_principle || '-'}
+                  </td>
+                  <td className="px-4 py-4">
+                    <span className="font-mono text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-sm border border-gray-200">{product.isp_registry || product.registry_number || '-'}</span>
+                  </td>
+                  <td className="px-4 py-4 text-center">
+                    {product.is_bioequivalent ? (
+                      <div className="flex justify-center" title="Medicamento Bioequivalente">
+                          <div className="bg-yellow-400 text-black text-[9px] font-black px-1.5 py-0.5 rounded border border-yellow-500 shadow-sm inline-flex items-center justify-center">
+                            <span>BIO</span>
+                          </div>
+                      </div>
+                    ) : (
+                      <span className="text-gray-300">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-4">
+                    {getSaleConditionBadge(product.sale_condition)}
+                  </td>
+                  <td className="px-4 py-4 text-right">
+                    <span className={`font-black text-lg ${
+                      (product.stock || product.stock_quantity || 0) <= 0 
+                        ? 'text-red-500' 
+                        : 'text-gray-900'
+                    }`}>
+                      {product.stock || product.stock_quantity || 0}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

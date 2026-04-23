@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { ChevronRight, ArrowLeft, Save, Pill, Search } from 'lucide-react';
 import { getPharmacySchema, getMyCompanyId, getCurrentUserId } from '../../../farmacia/api/pharmacyClient';
 
 const SALE_CONDITIONS = [
@@ -11,9 +12,23 @@ const SALE_CONDITIONS = [
 export default function CatalogoMedicamentos() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [showModal, setShowModal] = useState(false);
+  const [view, setView] = useState('list');
   const [activeTab, setActiveTab] = useState('ident');
-  const emptyForm = { id: null, name: '', active_ingredient: '', laboratory_name: '', registro_sanitario: '', sale_condition: 'VD', unit_price: '', barcode: '' };
+  const [searchTerm, setSearchTerm] = useState('');
+  const emptyForm = { 
+    id: null, 
+    name: '', 
+    active_ingredient: '', 
+    laboratory_name: '', 
+    registro_sanitario: '', 
+    sale_condition: 'VD', 
+    unit_price: '', 
+    barcode: '',
+    purchase_uom: '',
+    sale_uom: '',
+    conversion_factor: 1,
+    barcode_purchase: ''
+  };
   const [form, setForm] = useState(emptyForm);
 
   const fetchList = async () => {
@@ -38,7 +53,7 @@ export default function CatalogoMedicamentos() {
   const openCreate = () => {
     resetForm();
     setActiveTab('ident');
-    setShowModal(true);
+    setView('form');
   };
 
   // Normalization helpers
@@ -69,6 +84,10 @@ export default function CatalogoMedicamentos() {
         sale_condition: form.sale_condition,
         unit_price: Number(form.unit_price) || 0,
         barcode: form.barcode || '',
+        purchase_uom: (form.purchase_uom || '').toUpperCase(),
+        sale_uom: (form.sale_uom || '').toUpperCase(),
+        conversion_factor: Number(form.conversion_factor) || 1,
+        barcode_purchase: form.barcode_purchase || '',
         company_id: companyId
       };
 
@@ -102,11 +121,14 @@ export default function CatalogoMedicamentos() {
       registro_sanitario: (row.registro_sanitario || '').toUpperCase(),
       sale_condition: row.sale_condition || 'VD',
       unit_price: row.unit_price ?? '',
-      barcode: row.barcode || ''
+      barcode: row.barcode || '',
+      purchase_uom: row.purchase_uom || '',
+      sale_uom: row.sale_uom || '',
+      conversion_factor: row.conversion_factor || 1,
+      barcode_purchase: row.barcode_purchase || ''
     });
     setActiveTab('ident');
-    setShowModal(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setView('form');
   };
 
   const handleDelete = async (id) => {
@@ -125,127 +147,189 @@ export default function CatalogoMedicamentos() {
     }
   };
 
+  if (view === 'form') {
+    return (
+      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+        <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
+            <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                <span className="hover:text-gray-900 cursor-pointer" onClick={() => { setView('list'); resetForm(); }}>Catálogo de Medicamentos</span>
+                <ChevronRight size={12} className="mx-1" />
+                <span className="text-[#4C3073]">{form.id ? `Editar Medicamento #${form.id}` : 'Nuevo Medicamento'}</span>
+            </div>
+            <div className="flex justify-between items-center mt-1">
+                <div className="flex gap-2">
+                    <button type="button" onClick={() => { setView('list'); resetForm(); }} className="bg-white border border-gray-300 text-gray-600 hover:bg-gray-50 px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-2">
+                        <ArrowLeft size={16} /> Cancelar y Volver
+                    </button>
+                </div>
+                <div>
+                   <button onClick={handleSave} disabled={loading} className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 disabled:opacity-50">
+                       <Save size={16} /> {loading ? 'Guardando...' : 'Guardar Medicamento'}
+                   </button>
+                </div>
+            </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-8">
+            <div className="max-w-5xl mx-auto space-y-6">
+                <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-6 flex justify-between items-start">
+                    <div>
+                        <h1 className="text-xl font-black text-[#4C3073] tracking-tight flex items-center gap-2">
+                            <Pill size={24} /> {form.id ? 'Editar Medicamento' : 'Nuevo Medicamento'}
+                        </h1>
+                        <p className="text-gray-500 font-medium mt-1">Complete los datos en las pestañas correspondientes</p>
+                    </div>
+                </div>
+
+                <div className="bg-white border border-gray-200 rounded-sm shadow-sm">
+                    <div className="border-b border-gray-200 px-6 pt-4">
+                        <nav className="flex gap-4">
+                            <button type="button" onClick={() => setActiveTab('ident')} className={`pb-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${activeTab === 'ident' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Identificación</button>
+                            <button type="button" onClick={() => setActiveTab('reg')} className={`pb-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${activeTab === 'reg' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Regulación</button>
+                            <button type="button" onClick={() => setActiveTab('commercial')} className={`pb-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${activeTab === 'commercial' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Comercial</button>
+                        </nav>
+                    </div>
+
+                    <div className="p-8">
+                        <form onSubmit={handleSave}>
+                            {activeTab === 'ident' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Nombre Comercial</label>
+                                        <input required placeholder="Nombre Comercial (ej: Amoval)" value={form.name} onChange={e => setUpper('name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">DCI / Principio Activo</label>
+                                        <input placeholder="Principio Activo" value={form.active_ingredient} onChange={e => setUpper('active_ingredient', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Laboratorio Fabricante</label>
+                                        <input placeholder="Laboratorio" value={form.laboratory_name} onChange={e => setUpper('laboratory_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'reg' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Registro ISP</label>
+                                        <input placeholder="Registro ISP" value={form.registro_sanitario} onChange={e => setUpper('registro_sanitario', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Condición de Venta</label>
+                                        <select value={form.sale_condition} onChange={e => setForm({...form, sale_condition: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none bg-white">
+                                            {SALE_CONDITIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'commercial' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Precio de Venta al Público</label>
+                                        <input required placeholder="0.00" type="number" step="0.01" value={form.unit_price} onChange={e => setForm({...form, unit_price: e.target.value.replace(/[^0-9.]/g, '')})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Código de Barras Venta (Dispensación)</label>
+                                        <input placeholder="Código de barras dispensación" value={form.barcode} onChange={e => setForm({...form, barcode: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                    <div className="col-span-1 sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-6 pt-4 border-t border-gray-100">
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Unidad de Compra (ej: CAJA CLÍNICA)</label>
+                                            <input placeholder="Unidad Compra" value={form.purchase_uom} onChange={e => setUpper('purchase_uom', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Unidad de Venta (ej: COMPRIMIDO)</label>
+                                            <input placeholder="Unidad Venta" value={form.sale_uom} onChange={e => setUpper('sale_uom', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Factor de Conversión</label>
+                                            <input type="number" placeholder="1" value={form.conversion_factor} onChange={e => setForm({...form, conversion_factor: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                    </div>
+                                    <div className="col-span-1 sm:col-span-2 pt-4 border-t border-gray-100">
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Código de Barras Compra (Caja Mayor)</label>
+                                        <input placeholder="Código de barras compra" value={form.barcode_purchase} onChange={e => setForm({...form, barcode_purchase: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                    </div>
+                                </div>
+                            )}
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+      </div>
+    );
+  }
+
+  const filteredProducts = products.filter(p => 
+    (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (p.dci || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (p.laboratory_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (p.registro_sanitario || '').includes(searchTerm)
+  );
+
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-bold text-[#4C3073]">Mantenedor: Catálogo de Medicamentos</h2>
-        <div>
-          <button onClick={openCreate} className="bg-[#4C3073] text-white px-4 py-2 rounded-sm">Nuevo Medicamento</button>
+    <div className="flex flex-col h-[calc(100vh-140px)] bg-white font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm">
+      <div className="border-b border-gray-200 px-4 py-2 bg-white flex flex-col gap-2 shrink-0">
+        <div className="flex items-center text-[11px] text-gray-500 uppercase tracking-widest font-bold">
+          <span>Farmacia</span>
+          <ChevronRight size={12} className="mx-1" />
+          <span className="text-gray-900">Catálogo de Medicamentos</span>
+        </div>
+        <div className="flex justify-between items-center mt-1">
+          <div className="flex gap-2">
+            <button 
+              onClick={openCreate} 
+              className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-1.5 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm active:scale-95"
+            >
+              Nuevo Medicamento
+            </button>
+          </div>
+          <div className="relative w-72">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input 
+              type="text" 
+              placeholder="Buscar medicamentos..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full rounded-sm border-gray-300 border pl-8 pr-3 py-1.5 text-xs focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none transition-all" 
+            />
+          </div>
         </div>
       </div>
 
-      {/* Modal / Panel for create/edit */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center p-8">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setShowModal(false)}></div>
-          <div className="relative bg-white w-full max-w-4xl rounded-lg shadow-lg z-10 overflow-hidden">
-            <div className="p-4 border-b flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-bold">Ficha Medicamento {form.id ? `#${form.id}` : ''}</h3>
-                <p className="text-sm text-gray-500">Complete los datos del medicamento en pestañas</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { setShowModal(false); }} className="px-3 py-1 border rounded">Cancelar</button>
-                <button onClick={handleSave} className="bg-[#4C3073] text-white px-4 py-1 rounded">Guardar</button>
-              </div>
-            </div>
-
-            <div className="p-6">
-              <div className="mb-4">
-                <nav className="flex gap-2">
-                  <button onClick={() => setActiveTab('ident')} className={`px-3 py-2 rounded-t ${activeTab === 'ident' ? 'bg-[#f3eafd] text-[#4C3073] font-bold' : 'bg-gray-100'}`}>Identificación</button>
-                  <button onClick={() => setActiveTab('reg')} className={`px-3 py-2 rounded-t ${activeTab === 'reg' ? 'bg-[#f3eafd] text-[#4C3073] font-bold' : 'bg-gray-100'}`}>Regulación</button>
-                  <button onClick={() => setActiveTab('commercial')} className={`px-3 py-2 rounded-t ${activeTab === 'commercial' ? 'bg-[#f3eafd] text-[#4C3073] font-bold' : 'bg-gray-100'}`}>Comercial</button>
-                </nav>
-              </div>
-
-              <form onSubmit={handleSave}>
-                {activeTab === 'ident' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[12px] font-bold text-gray-600 mb-1 block">Nombre Comercial</label>
-                      <input required placeholder="Nombre Comercial (ej: Amoval)" value={form.name} onChange={e => setUpper('name', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                    </div>
-                    <div>
-                      <label className="text-[12px] font-bold text-gray-600 mb-1 block">DCI / Principio Activo</label>
-                      <input placeholder="Principio Activo" value={form.active_ingredient} onChange={e => setUpper('active_ingredient', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                    </div>
-                    <div>
-                      <label className="text-[12px] font-bold text-gray-600 mb-1 block">Laboratorio Fabricante</label>
-                      <input placeholder="Laboratorio" value={form.laboratory_name} onChange={e => setUpper('laboratory_name', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === 'reg' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[12px] font-bold text-gray-600 mb-1 block">Registro ISP</label>
-                      <input placeholder="Registro ISP" value={form.registro_sanitario} onChange={e => setUpper('registro_sanitario', e.target.value)} className="border px-3 py-2 rounded-sm w-full" />
-                    </div>
-                    <div>
-                      <label className="text-[12px] font-bold text-gray-600 mb-1 block">Condición de Venta</label>
-                      <select value={form.sale_condition} onChange={e => setForm({...form, sale_condition: e.target.value})} className="border px-3 py-2 rounded-sm w-full">
-                        {SALE_CONDITIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === 'commercial' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[12px] font-bold text-gray-600 mb-1 block">Precio de Venta al Público</label>
-                      <input required placeholder="0.00" type="number" step="0.01" value={form.unit_price} onChange={e => setForm({...form, unit_price: e.target.value.replace(/[^0-9.]/g, '')})} className="border px-3 py-2 rounded-sm w-full" />
-                    </div>
-                    <div>
-                      <label className="text-[12px] font-bold text-gray-600 mb-1 block">Código de Barras (opcional)</label>
-                      <input placeholder="Código de barras" value={form.barcode} onChange={e => setForm({...form, barcode: e.target.value})} className="border px-3 py-2 rounded-sm w-full" />
-                    </div>
-                  </div>
-                )}
-
-                <div className="mt-4 flex gap-2">
-                  <button type="submit" className="bg-[#4C3073] text-white px-4 py-2 rounded-sm">{form.id ? 'Actualizar' : 'Crear'}</button>
-                  <button type="button" onClick={() => { resetForm(); setShowModal(false); }} className="border px-4 py-2 rounded-sm">Cancelar / Limpiar</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="bg-white border border-gray-200 rounded-sm overflow-hidden">
-        <div className="p-4 border-b">Listado de medicamentos {loading && '...'} </div>
-        <table className="w-full text-sm">
-          <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+      <div className="flex-1 overflow-auto bg-gray-50/30">
+        <table className="w-full text-left border-collapse">
+          <thead className="bg-[#f8f9fa] border-b border-gray-200 sticky top-0 z-10">
             <tr>
-              <th className="p-3 text-left">Nombre</th>
-              <th className="p-3 text-left">DCI</th>
-              <th className="p-3 text-left">Laboratorio</th>
-              <th className="p-3 text-left">Registro ISP</th>
-              <th className="p-3 text-left">Condición</th>
-              <th className="p-3 text-left">Precio</th>
-              <th className="p-3 text-right">Acciones</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Nombre</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">DCI</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Laboratorio</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Registro ISP</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Condición</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Precio</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-right">Acciones</th>
             </tr>
           </thead>
-          <tbody>
-            {products.map(p => (
-              <tr key={p.id} className="border-t">
-                <td className="p-3">{p.name}</td>
-                <td className="p-3">{p.dci}</td>
-                <td className="p-3">{p.laboratory_name}</td>
-                <td className="p-3">{p.registro_sanitario}</td>
-                <td className="p-3">{p.sale_condition}</td>
-                <td className="p-3">{p.unit_price?.toFixed ? p.unit_price.toFixed(2) : p.unit_price}</td>
-                <td className="p-3 text-right">
-                  <button onClick={() => handleEdit(p)} className="text-sm text-[#4C3073] mr-3">Editar</button>
-                  <button onClick={() => handleDelete(p.id)} className="text-sm text-red-500">Eliminar</button>
+          <tbody className="divide-y divide-gray-100 bg-white">
+            {filteredProducts.map(p => (
+              <tr key={p.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onClick={() => handleEdit(p)}>
+                <td className="px-4 py-4 font-bold text-[#4C3073]">{p.name}</td>
+                <td className="px-4 py-4 font-semibold">{p.dci}</td>
+                <td className="px-4 py-4 text-gray-500">{p.laboratory_name}</td>
+                <td className="px-4 py-4 text-gray-500">{p.registro_sanitario}</td>
+                <td className="px-4 py-4 text-gray-500">{p.sale_condition}</td>
+                <td className="px-4 py-4 font-black text-gray-900">${p.unit_price?.toFixed ? p.unit_price.toFixed(2) : p.unit_price}</td>
+                <td className="px-4 py-4 text-right">
+                  <button onClick={(e) => { e.stopPropagation(); handleEdit(p); }} className="text-[11px] font-bold text-[#4C3073] mr-3 uppercase tracking-wider">Editar</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="text-[11px] font-bold text-red-500 uppercase tracking-wider">Eliminar</button>
                 </td>
               </tr>
             ))}
-            {products.length === 0 && !loading && (
-              <tr><td colSpan={7} className="p-4 text-center text-gray-500">Sin medicamentos</td></tr>
+            {filteredProducts.length === 0 && !loading && (
+              <tr><td colSpan={7} className="p-8 text-center text-gray-500">Sin medicamentos</td></tr>
             )}
           </tbody>
         </table>

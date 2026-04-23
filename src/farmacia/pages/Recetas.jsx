@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, Search, Plus, ShieldAlert, X, Activity, Pill, Trash2, Eye, Calendar, User, UserCheck } from 'lucide-react';
+import { FileText, Search, Plus, ShieldAlert, X, Activity, Pill, Trash2, Eye, Calendar, User, UserCheck, ChevronRight, ArrowLeft, Save } from 'lucide-react';
 import { 
   fetchPrescriptions, 
   fetchPharmacyPatients, 
@@ -15,8 +15,9 @@ export default function Recetas() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Modal de Registro
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [view, setView] = useState('list'); // 'list', 'create', 'detail'
+  
+  // Registro
   const [formData, setFormData] = useState({
     folio_electronico: '',
     prescriber_rut: '',
@@ -112,7 +113,7 @@ export default function Recetas() {
       if (error) {
         setFormError(error.message || "Error al procesar la receta transaccional");
       } else {
-        setIsModalOpen(false);
+        setView('list');
         resetForm();
         loadData();
       }
@@ -138,6 +139,7 @@ export default function Recetas() {
 
   const openDetail = async (prescription) => {
     setDetailPrescription(prescription);
+    setView('detail');
     setLoadingDetail(true);
     try {
       const { data, error } = await fetchPrescriptionItems(prescription.id);
@@ -167,258 +169,288 @@ export default function Recetas() {
     return <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${colors[status] || 'bg-slate-100'}`}>{status}</span>;
   };
 
-  return (
-    <div className="animate-in fade-in duration-300 h-full flex flex-col relative space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3 text-emerald-700 mb-1">
-            <FileText size={28} className="stroke-[2.5px]" />
-            <h1 className="text-2xl font-black tracking-tight uppercase">Gestión de Recetas</h1>
-          </div>
-          <p className="text-slate-500 text-sm">Registro transaccional de prescripciones médicas y despacho.</p>
+  if (view === 'create') {
+    return (
+      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+        {/* Control Panel Superior */}
+        <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
+            <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('list')}>Gestión de Recetas</span>
+                <ChevronRight size={12} className="mx-1" />
+                <span className="text-[#4C3073]">Nueva Receta</span>
+            </div>
+            <div className="flex justify-between items-center mt-1">
+                <div className="flex gap-2">
+                    <button onClick={() => setView('list')} className="bg-white border border-gray-300 text-gray-600 hover:bg-gray-50 px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-2">
+                        <ArrowLeft size={16} /> Cancelar y Volver
+                    </button>
+                </div>
+                <div>
+                   <button onClick={handleFormSubmit} disabled={submitting} className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 disabled:opacity-50">
+                       <Save size={16} /> {submitting ? 'GUARDANDO...' : 'GUARDAR RECETA'}
+                   </button>
+                </div>
+            </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="relative w-64">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-emerald-500 shadow-sm"
-              placeholder="Folio o Médico..."
+        <div className="flex-1 overflow-y-auto p-8">
+            <div className="max-w-6xl mx-auto space-y-6">
+                <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-6 flex justify-between items-start">
+                    <div>
+                        <h1 className="text-xl font-black text-[#4C3073] tracking-tight flex items-center gap-2">
+                            <Pill size={24} /> REGISTRAR PRESCRIPCIÓN MÉDICA
+                        </h1>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
+                    {/* Columna Izquierda: Datos Cabecera */}
+                    <div className="md:col-span-4 space-y-6">
+                        <div className="p-6 bg-white shadow-sm rounded-sm border border-gray-200 space-y-4">
+                            <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest border-b pb-2">Datos de la Receta</h3>
+                            
+                            <div>
+                                <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Folio Electrónico</label>
+                                <input type="text" name="folio_electronico" required value={formData.folio_electronico} onChange={handleInputChange} 
+                                className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" placeholder="REC-001" />
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Paciente</label>
+                                <select name="patient_id" required value={formData.patient_id} onChange={handleInputChange} 
+                                className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none">
+                                <option value="">Seleccionar...</option>
+                                {patients.map(p => <option key={p.id} value={p.id}>{p.rut} - {p.first_name} {p.last_name}</option>)}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Nombre Médico</label>
+                                <input type="text" name="prescriber_name" required value={formData.prescriber_name} onChange={handleInputChange} 
+                                className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" placeholder="Dr. Nome L. Olvido" />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">RUT Médico</label>
+                                <input type="text" name="prescriber_rut" required value={formData.prescriber_rut} onChange={handleInputChange} 
+                                className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" placeholder="12.345.678-9" />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Columna Derecha: Selector de Medicamentos */}
+                    <div className="md:col-span-8 space-y-4">
+                        <div className="bg-white shadow-sm rounded-sm border border-gray-200 p-6">
+                            <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest flex items-center gap-2 mb-4 border-b pb-2">
+                                <Search size={14} /> Medicamentos Recetados
+                            </h3>
+
+                            <div className="relative mb-6">
+                                <input
+                                    type="text"
+                                    className="w-full pl-4 pr-10 py-3 bg-gray-50 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:outline-none focus:ring-1 focus:ring-[#4C3073]"
+                                    placeholder="Escribe el nombre del medicamento..."
+                                    value={productSearch}
+                                    onChange={(e) => setProductSearch(e.target.value)}
+                                />
+                                {productSearch && filteredProducts.length > 0 && (
+                                    <div className="absolute z-20 top-full left-0 w-full bg-white border shadow-xl rounded-sm mt-1 overflow-hidden">
+                                    {filteredProducts.map(p => (
+                                        <button key={p.id} onClick={() => addItem(p)} className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b last:border-0 flex justify-between items-center group">
+                                        <span className="font-bold text-gray-700 group-hover:text-[#4C3073]">{p.name}</span>
+                                        <Plus size={16} className="text-[#4C3073]" />
+                                        </button>
+                                    ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-3 min-h-[300px]">
+                                {selectedItems.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center h-40 border-2 border-dashed border-gray-200 rounded-sm text-gray-400 italic text-sm bg-gray-50">
+                                        No hay medicamentos seleccionados
+                                    </div>
+                                ) : (
+                                    selectedItems.map(item => (
+                                    <div key={item.product_id} className="p-4 bg-gray-50 border border-gray-200 rounded-sm shadow-sm flex flex-col gap-3 group hover:border-[#4C3073] transition-all">
+                                        <div className="flex items-center justify-between border-b pb-2 border-gray-200">
+                                            <span className="font-black text-gray-800 flex items-center gap-2">
+                                                <Pill size={16} className="text-[#4C3073]" /> {item.product_name}
+                                            </span>
+                                            <button onClick={() => removeItem(item.product_id)} className="text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-4 mt-2">
+                                            <div className="col-span-1">
+                                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Cant.</label>
+                                                <input type="number" min="1" value={item.quantity_prescribed} onChange={(e) => updateItem(item.product_id, 'quantity_prescribed', e.target.value)} 
+                                                className="w-full px-2 py-1.5 border border-gray-300 rounded-sm bg-white font-bold outline-none focus:border-[#4C3073]" />
+                                            </div>
+                                            <div className="col-span-3">
+                                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Indicaciones</label>
+                                                <input type="text" value={item.dosage_instructions} onChange={(e) => updateItem(item.product_id, 'dosage_instructions', e.target.value)} 
+                                                className="w-full px-2 py-1.5 border border-gray-300 rounded-sm bg-white italic text-sm outline-none focus:border-[#4C3073]" placeholder="Ej: 1 cada 8 horas" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {formError && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-sm text-xs font-bold uppercase tracking-widest">{formError}</div>}
+            </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'detail' && detailPrescription) {
+    return (
+      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+        <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
+            <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('list')}>Gestión de Recetas</span>
+                <ChevronRight size={12} className="mx-1" />
+                <span className="text-[#4C3073]">{detailPrescription.folio_electronico}</span>
+            </div>
+            <div className="flex justify-between items-center mt-1">
+                <div className="flex gap-2">
+                    <button onClick={() => setView('list')} className="bg-white border border-gray-300 text-gray-600 hover:bg-gray-50 px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-2">
+                        <ArrowLeft size={16} /> Volver
+                    </button>
+                </div>
+                <div>{getStatusBadge(detailPrescription.status)}</div>
+            </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-8">
+            <div className="max-w-4xl mx-auto space-y-6">
+                <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-8 flex justify-between items-start">
+                    <div>
+                        <h1 className="text-2xl font-black text-[#4C3073] tracking-tight">{detailPrescription.folio_electronico}</h1>
+                        <p className="text-gray-500 font-medium mt-1">Paciente: {detailPrescription.patient?.first_name} {detailPrescription.patient?.last_name}</p>
+                    </div>
+                    <div className="text-right text-xs space-y-1">
+                        <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Fecha:</span> <span className="font-mono">{new Date(detailPrescription.created_at).toLocaleDateString()}</span></p>
+                        <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Médico:</span> <span>{detailPrescription.prescriber_name}</span></p>
+                    </div>
+                </div>
+
+                <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-6">
+                    <h4 className="text-xs font-black uppercase tracking-[0.2em] text-gray-500 mb-4 border-b pb-2">Detalle de Medicamentos</h4>
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="border-b border-gray-200 text-gray-500 text-left font-bold text-[11px] uppercase tracking-widest">
+                                <th className="py-3 px-4">Producto</th>
+                                <th className="py-3 px-4 text-center">Cant.</th>
+                                <th className="py-3 px-4">Indicaciones</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {loadingDetail ? (
+                                <tr><td colSpan="3" className="py-10 text-center text-gray-400 font-bold">Cargando items...</td></tr>
+                            ) : detailItems.map(item => (
+                                <tr key={item.id} className="hover:bg-gray-50">
+                                    <td className="py-4 px-4 font-bold text-gray-800 flex items-center gap-3">
+                                        <Pill size={16} className="text-[#4C3073]" />
+                                        {item.product?.name}
+                                    </td>
+                                    <td className="py-4 px-4 text-center font-black text-gray-900">{item.quantity_prescribed}</td>
+                                    <td className="py-4 px-4 italic text-gray-500">{item.dosage_instructions || 'Sin instrucciones adicionales'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {detailItems.length === 0 && !loadingDetail && (
+                        <div className="text-center py-12 text-gray-400 italic">No hay items vinculados.</div>
+                    )}
+                </div>
+            </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-140px)] bg-white font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm">
+      <div className="border-b border-gray-200 px-4 py-2 bg-white flex flex-col gap-2 shrink-0">
+        <div className="flex items-center text-[11px] text-gray-500 uppercase tracking-widest font-bold">
+          <span>Farmacia</span>
+          <ChevronRight size={12} className="mx-1" />
+          <span className="text-gray-900">Gestión de Recetas</span>
+        </div>
+        <div className="flex justify-between items-center mt-1">
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setView('create')} 
+              className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-1.5 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm active:scale-95"
+            >
+              Nueva Receta
+            </button>
+          </div>
+          <div className="relative w-72">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input 
+              type="text" 
+              placeholder="Buscar folio o médico..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full rounded-sm border-gray-300 border pl-8 pr-3 py-1.5 text-xs focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none transition-all" 
             />
           </div>
-          <button 
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-md transition-all active:scale-95"
-          >
-            <Plus size={18} />
-            Nueva Receta
-          </button>
         </div>
       </div>
 
-      {/* Grid Principal */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1 overflow-hidden flex flex-col">
-        <table className="w-full text-left text-sm border-collapse">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              <th className="px-6 py-4 font-bold text-slate-500 uppercase text-[11px] tracking-widest">Folio</th>
-              <th className="px-6 py-4 font-bold text-slate-500 uppercase text-[11px] tracking-widest">Paciente</th>
-              <th className="px-6 py-4 font-bold text-slate-500 uppercase text-[11px] tracking-widest">Médico</th>
-              <th className="px-6 py-4 font-bold text-slate-500 uppercase text-[11px] tracking-widest">Estado</th>
-              <th className="px-6 py-4 font-bold text-slate-500 uppercase text-[11px] tracking-widest text-center">Acciones</th>
+      <div className="flex-1 overflow-auto bg-gray-50/30">
+        <table className="w-full text-left border-collapse">
+          <thead className="bg-[#f8f9fa] border-b border-gray-200 sticky top-0 z-10">
+            <tr>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Folio / Fecha</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Paciente</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Médico</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Tipo</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-center">Estado</th>
+              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-right">Acciones</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
-            {loading ? (
-              <tr><td colSpan="5" className="py-20 text-center text-slate-400">Cargando prescripciones...</td></tr>
-            ) : filteredPrescriptions.map(p => (
-              <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
-                <td className="px-6 py-4 font-mono font-bold text-emerald-700">{p.folio_electronico}</td>
-                <td className="px-6 py-4">
-                  <div className="flex flex-col">
-                    <span className="font-bold text-slate-700">{p.patient?.first_name} {p.patient?.last_name}</span>
-                    <span className="text-[11px] text-slate-400">{p.patient?.rut}</span>
-                  </div>
+          <tbody className="divide-y divide-gray-100 bg-white">
+            {filteredPrescriptions.map(p => (
+              <tr key={p.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onClick={() => openDetail(p)}>
+                <td className="px-4 py-4">
+                  <p className="font-bold text-[#4C3073]">{p.folio || p.id.split('-')[0]}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">{new Date(p.prescription_date).toLocaleDateString()}</p>
                 </td>
-                <td className="px-6 py-4 text-slate-600">{p.prescriber_name}</td>
-                <td className="px-6 py-4">{getStatusBadge(p.status)}</td>
-                <td className="px-6 py-4 text-center">
-                  <button 
-                    onClick={() => openDetail(p)}
-                    className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
-                  >
-                    <Eye size={16} /> Ver Detalle
-                  </button>
+                <td className="px-4 py-4">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{p.patient_name}</span>
+                  </div>
+                  {p.patient_rut && <p className="text-[10px] text-gray-500 mt-0.5">{p.patient_rut}</p>}
+                </td>
+                <td className="px-4 py-4 text-gray-600">{p.doctor_name}</td>
+                <td className="px-4 py-4 text-gray-500">
+                  <span className="bg-gray-100 px-2 py-0.5 rounded-sm text-[10px] font-bold border border-gray-200">{p.prescription_type}</span>
+                </td>
+                <td className="px-4 py-4 text-center">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-[10px] font-bold tracking-wider border uppercase ${
+                    p.status === 'DESPACHADA' ? 'bg-green-50 text-green-700 border-green-200' : 
+                    p.status === 'ANULADA' ? 'bg-red-50 text-red-700 border-red-200' :
+                    'bg-indigo-50 text-indigo-700 border-indigo-200'
+                  }`}>
+                    {p.status || 'INGRESADA'}
+                  </span>
+                </td>
+                <td className="px-4 py-4 text-right">
+                  <button onClick={(e) => { e.stopPropagation(); openDetail(p); }} className="text-[11px] font-bold text-[#4C3073] mr-3 uppercase tracking-wider">Ver</button>
                 </td>
               </tr>
             ))}
+            {filteredPrescriptions.length === 0 && !loading && (
+              <tr><td colSpan={6} className="p-8 text-center text-gray-500">No hay recetas registradas</td></tr>
+            )}
           </tbody>
         </table>
       </div>
-
-      {/* Modal Nueva Receta */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[95vh]">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-emerald-50/30">
-              <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                <Pill size={24} className="text-emerald-500" />
-                REGISTRAR PRESCRIPCIÓN MÉDICA
-              </h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-12 gap-8">
-              {/* Columna Izquierda: Datos Cabecera */}
-              <div className="md:col-span-4 space-y-6">
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-4">
-                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest border-b pb-2">Datos de la Receta</h3>
-                  
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Folio Electrónico</label>
-                    <input type="text" name="folio_electronico" required value={formData.folio_electronico} onChange={handleInputChange} 
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500" placeholder="REC-001" />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Paciente</label>
-                    <select name="patient_id" required value={formData.patient_id} onChange={handleInputChange} 
-                      className="w-full px-3 py-2 border rounded-lg text-sm">
-                      <option value="">Seleccionar...</option>
-                      {patients.map(p => <option key={p.id} value={p.id}>{p.rut} - {p.first_name} {p.last_name}</option>)}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Nombre Médico</label>
-                    <input type="text" name="prescriber_name" required value={formData.prescriber_name} onChange={handleInputChange} 
-                      className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Dr. Nome L. Olvido" />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">RUT Médico</label>
-                    <input type="text" name="prescriber_rut" required value={formData.prescriber_rut} onChange={handleInputChange} 
-                      className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="12.345.678-9" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Columna Derecha: Selector de Medicamentos */}
-              <div className="md:col-span-8 space-y-4">
-                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                  <Search size={14} /> Medicamentos Recetados
-                </h3>
-
-                <div className="relative">
-                  <input
-                    type="text"
-                    className="w-full pl-4 pr-10 py-3 bg-emerald-50/50 border-2 border-dashed border-emerald-200 rounded-xl text-sm italic focus:border-emerald-500 focus:outline-none"
-                    placeholder="Escribe el nombre del medicamento..."
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                  />
-                  {productSearch && filteredProducts.length > 0 && (
-                    <div className="absolute z-20 top-full left-0 w-full bg-white border shadow-xl rounded-lg mt-1 overflow-hidden">
-                      {filteredProducts.map(p => (
-                        <button key={p.id} onClick={() => addItem(p)} className="w-full text-left px-4 py-3 hover:bg-emerald-50 border-b last:border-0 flex justify-between items-center group">
-                          <span className="font-bold text-slate-700 group-hover:text-emerald-700">{p.name}</span>
-                          <Plus size={16} className="text-emerald-500" />
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-3 min-h-[300px]">
-                  {selectedItems.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-40 border-2 border-dashed border-slate-100 rounded-xl text-slate-400 italic text-sm">
-                      No hay medicamentos seleccionados
-                    </div>
-                  ) : (
-                    selectedItems.map(item => (
-                      <div key={item.product_id} className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col gap-3 group hover:border-emerald-200 transition-all">
-                        <div className="flex items-center justify-between">
-                          <span className="font-black text-slate-800 flex items-center gap-2 underline decoration-emerald-200">
-                             <Pill size={16} className="text-emerald-500" /> {item.product_name}
-                          </span>
-                          <button onClick={() => removeItem(item.product_id)} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
-                        </div>
-                        <div className="grid grid-cols-4 gap-4">
-                          <div className="col-span-1">
-                            <label className="text-[10px] font-black text-slate-400 uppercase">Cant.</label>
-                            <input type="number" min="1" value={item.quantity_prescribed} onChange={(e) => updateItem(item.product_id, 'quantity_prescribed', e.target.value)} 
-                              className="w-full px-2 py-1 border rounded bg-slate-50 font-bold" />
-                          </div>
-                          <div className="col-span-3">
-                            <label className="text-[10px] font-black text-slate-400 uppercase">Indicaciones</label>
-                            <input type="text" value={item.dosage_instructions} onChange={(e) => updateItem(item.product_id, 'dosage_instructions', e.target.value)} 
-                              className="w-full px-2 py-1 border rounded bg-slate-50 italic text-sm" placeholder="Ej: 1 cada 8 horas" />
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="px-6 py-4 bg-slate-50 border-t flex justify-between items-center">
-              <div className="text-sm font-bold text-slate-500">
-                Total Items: <span className="text-emerald-600 font-black">{selectedItems.length}</span>
-              </div>
-              <div className="flex gap-4">
-                <button onClick={() => setIsModalOpen(false)} className="px-6 py-2 font-bold text-slate-400 hover:text-slate-600">Cerrar</button>
-                <button 
-                  onClick={handleFormSubmit}
-                  disabled={submitting} 
-                  className="bg-emerald-600 text-white px-8 py-2 rounded-xl font-black shadow-lg shadow-emerald-200 hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
-                >
-                  {submitting ? 'GUARDANDO...' : 'GUARDAR RECETA COMPLETA'}
-                </button>
-              </div>
-            </div>
-            {formError && <div className="bg-red-600 text-white text-center py-2 text-[10px] font-black uppercase tracking-widest">{formError}</div>}
-          </div>
-        </div>
-      )}
-
-      {/* Modal Detalle */}
-      {detailPrescription && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border-4 border-emerald-500">
-            <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
-              <div>
-                <h2 className="text-xl font-black italic uppercase tracking-tighter">FOLIO: {detailPrescription.folio_electronico}</h2>
-                <div className="flex gap-4 mt-2 text-xs text-slate-400 font-bold">
-                  <span className="flex items-center gap-1"><User size={14}/> {detailPrescription.patient?.first_name} {detailPrescription.patient?.last_name}</span>
-                  <span className="flex items-center gap-1 text-emerald-400"><Calendar size={14}/> {new Date(detailPrescription.created_at).toLocaleDateString()}</span>
-                </div>
-              </div>
-              <button onClick={() => setDetailPrescription(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors"><X size={24}/></button>
-            </div>
-            
-            <div className="p-6">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b-2 border-slate-100 text-slate-400 text-left font-black text-[11px] uppercase tracking-widest">
-                    <th className="py-3">Producto</th>
-                    <th className="py-3 text-center">Cant.</th>
-                    <th className="py-3">Indicaciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {loadingDetail ? (
-                    <tr><td colSpan="3" className="py-10 text-center animate-pulse text-emerald-600 font-bold">Recuperando items de la receta...</td></tr>
-                  ) : detailItems.map(item => (
-                    <tr key={item.id} className="group hover:bg-slate-50 transition-colors">
-                      <td className="py-4 font-bold text-slate-700 flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600 shrink-0"><Pill size={16}/></div>
-                        {item.product?.name}
-                      </td>
-                      <td className="py-4 text-center font-black text-emerald-600 bg-emerald-50/30 rounded-lg">{item.quantity_prescribed}</td>
-                      <td className="py-4 italic text-slate-500 text-xs pl-4">{item.dosage_instructions || 'Sin instrucciones adicionales'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {detailItems.length === 0 && !loadingDetail && (
-                <div className="text-center py-12 text-slate-300 italic flex flex-col items-center gap-2">
-                   <ShieldAlert size={48} opacity={0.3} />
-                   <span>No hay items vinculados a esta receta</span>
-                </div>
-              )}
-            </div>
-            
-            <div className="p-4 bg-slate-50 border-t flex justify-end">
-              <button onClick={() => setDetailPrescription(null)} className="bg-slate-800 hover:bg-slate-900 text-white px-10 py-2 rounded-xl font-black text-xs tracking-widest transition-all">CERRAR</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

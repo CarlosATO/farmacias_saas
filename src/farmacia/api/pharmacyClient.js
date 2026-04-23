@@ -167,7 +167,15 @@ export const fetchPurchaseOrderItems = async (purchaseOrderId) => {
     .eq('po_id', purchaseOrderId);
 };
 
-export const receivePurchaseOrder = async (poId, items) => {
+export const fetchOrderReceipts = async (poId) => {
+  return await getPharmacySchema()
+    .from('inventory_receipts')
+    .select('id, document_type, document_number, received_date, notes, created_at')
+    .eq('po_id', poId)
+    .order('created_at', { ascending: false });
+};
+
+export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
   const schema = getPharmacySchema();
   const companyId = await getMyCompanyId();
   if (!companyId) throw new Error("No se pudo obtener el ID de la compañía.");
@@ -175,65 +183,158 @@ export const receivePurchaseOrder = async (poId, items) => {
   const userId = await getCurrentUserId();
   if (!userId) throw new Error("No se pudo obtener el usuario actual.");
 
+  // 1. Get QUARANTINE location
+  const { data: locData, error: locError } = await schema
+    .from('locations')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('location_type', 'QUARANTINE')
+    .limit(1)
+    .maybeSingle();
+
+  if (locError) throw new Error("Error obteniendo ubicación QUARANTINE: " + locError.message);
+  if (!locData) throw new Error("No se encontró la ubicación de Cuarentena para esta empresa. Contacte a soporte.");
+  const locationId = locData.id;
+
+  const itemUpdates = {};
+  const batchesToInsert = [];
+
+  // 2. Iterate batchesData to prepare inserts and group updates
+  for (const batch of batchesData) {
+    const factor = Number(batch.conversion_factor) || 1;
+    const fractionatedQty = Number(batch.entered_quantity) * factor;
+
+    batchesToInsert.push({
+      company_id: companyId,
+      product_id: batch.product_id,
+      location_id: locationId,
+      batch_number: batch.batch_number,
+      expiry_date: batch.expiry_date,
+      initial_quantity: fractionatedQty,
+      current_quantity: fractionatedQty,
+      po_id: poId
+    });
+
+    if (!itemUpdates[batch.po_item_id]) {
+      itemUpdates[batch.po_item_id] = { entered_total: 0, product_id: batch.product_id, fractionated_total: 0 };
+    }
+    itemUpdates[batch.po_item_id].entered_total += Number(batch.entered_quantity);
+    itemUpdates[batch.po_item_id].fractionated_total += fractionatedQty;
+  }
+
+  // Perform Inserts
+  if (batchesToInsert.length > 0) {
+    // 0. Insert Receipt (Header)
+    const { data: receipt, error: receiptErr } = await schema
+      .from('inventory_receipts')
+      .insert([{
+        company_id: companyId,
+        po_id: poId,
+        supplier_id: receiptData.supplier_id,
+        document_type: receiptData.document_type,
+        document_number: receiptData.document_number,
+        notes: receiptData.notes,
+        created_by: userId
+      }])
+      .select()
+      .single();
+
+    if (receiptErr) throw receiptErr;
+
+    // 1. Insert Batches and get the generated IDs
+    const { data: insertedBatches, error: batchErr } = await schema
+      .from('inventory_batches')
+      .insert(batchesToInsert)
+      .select();
+
+    if (batchErr) throw batchErr;
+
+    // 2. Prepare Movements using the inserted batch IDs
+    const movementsToInsert = insertedBatches.map((insertedBatch, index) => {
+      // Correlate with original data for unit_cost
+      const originalBatch = batchesData[index];
+
+      return {
+        company_id: companyId,
+        product_id: insertedBatch.product_id,
+        batch_id: insertedBatch.id,
+        batch_number: insertedBatch.batch_number,
+        from_location_id: null,
+        to_location_id: locationId,
+        movement_type: 'IN_PURCHASE',
+        quantity: insertedBatch.initial_quantity,
+        unit_cost: originalBatch?.unit_cost || 0,
+        receipt_id: receipt.id,
+        notes: `Lote ${insertedBatch.batch_number} - OC ${poId}`
+      };
+    });
+
+    const { error: movErr } = await schema
+      .from('inventory_movements')
+      .insert(movementsToInsert);
+
+    if (movErr) throw movErr;
+  }
+
+  // 3. Update purchase_order_items & products
+  for (const poItemId of Object.keys(itemUpdates)) {
+    const updateData = itemUpdates[poItemId];
+
+    const { data: poItem, error: poItemErr } = await schema
+      .from('purchase_order_items')
+      .select('quantity_received')
+      .eq('id', poItemId)
+      .single();
+    if (poItemErr) throw poItemErr;
+
+    const newQtyReceived = Number(poItem.quantity_received || 0) + updateData.entered_total;
+
+    const { error: updPoItemErr } = await schema
+      .from('purchase_order_items')
+      .update({ quantity_received: newQtyReceived, updated_by: userId })
+      .eq('id', poItemId);
+    if (updPoItemErr) throw updPoItemErr;
+
+    const { data: product, error: prodErr } = await schema
+      .from('products')
+      .select('stock_quantity')
+      .eq('id', updateData.product_id)
+      .single();
+    if (prodErr) throw prodErr;
+
+    const newStock = Number(product.stock_quantity || 0) + updateData.fractionated_total;
+    const { error: updProdErr } = await schema
+      .from('products')
+      .update({ stock_quantity: newStock, updated_by: userId })
+      .eq('id', updateData.product_id);
+    if (updProdErr) throw updProdErr;
+  }
+
+  // 4. Evaluate PO status
+  const { data: allItems, error: allItemsErr } = await schema
+    .from('purchase_order_items')
+    .select('quantity, quantity_received')
+    .eq('po_id', poId);
+
+  if (allItemsErr) throw allItemsErr;
+
+  let allReceived = true;
+  for (const it of allItems) {
+    if (Number(it.quantity_received || 0) < Number(it.quantity)) {
+      allReceived = false;
+      break;
+    }
+  }
+
+  const newStatus = allReceived ? 'RECEIVED' : 'PARTIAL';
   const { data: header, error: headerError } = await schema
     .from('purchase_orders')
-    .update({ status: 'RECEIVED' })
+    .update({ status: newStatus, updated_by: userId })
     .eq('id', poId)
     .select()
     .single();
 
   if (headerError) throw headerError;
-
-  const batchPayload = items.map(item => ({
-    product_id: item.product_id,
-    po_id: poId,
-    batch_number: item.batch_number,
-    expiry_date: item.expiry_date,
-    quantity_received: item.received_quantity,
-    unit_cost: item.unit_cost,
-    company_id: companyId
-  }));
-
-  const { error: batchError } = await schema
-    .from('inventory_batches')
-    .insert(batchPayload);
-
-  if (batchError) throw batchError;
-
-  const movementPayload = items.map(item => ({
-    company_id: companyId,
-    product_id: item.product_id,
-    user_id: userId,
-    movement_type: 'IN_PURCHASE',
-    quantity: item.received_quantity,
-    reason: `Recepción OC ${poId}`,
-    batch_number: item.batch_number,
-    expiry_date: item.expiry_date
-  }));
-
-  const { error: movementError } = await schema
-    .from('inventory_movements')
-    .insert(movementPayload);
-
-  if (movementError) throw movementError;
-
-  for (const item of items) {
-    const { data: product, error: productErr } = await schema
-      .from('products')
-      .select('stock_quantity')
-      .eq('id', item.product_id)
-      .single();
-
-    if (productErr) throw productErr;
-
-    const newStock = Number(product.stock_quantity || 0) + Number(item.received_quantity);
-    const { error: updateError } = await schema
-      .from('products')
-      .update({ stock_quantity: newStock })
-      .eq('id', item.product_id);
-
-    if (updateError) throw updateError;
-  }
 
   return { data: header, error: null };
 };
