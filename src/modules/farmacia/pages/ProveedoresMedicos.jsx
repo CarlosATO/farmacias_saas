@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronRight, ArrowLeft, Save, Building2, Search } from 'lucide-react';
-import { getPharmacySchema, getMyCompanyId, getCurrentUserId } from '../../../farmacia/api/pharmacyClient';
+import { fetchSuppliers, getPharmacySchema, getMyCompanyId, getCurrentUserId } from '../../../farmacia/api/pharmacyClient';
 
 export default function ProveedoresMedicos() {
   const [suppliers, setSuppliers] = useState([]);
@@ -46,8 +46,7 @@ export default function ProveedoresMedicos() {
   const fetchList = async () => {
     setLoading(true);
     try {
-      const schema = getPharmacySchema();
-      const { data, error } = await schema.from('suppliers').select('*').order('created_at', { ascending: false });
+      const { data, error } = await fetchSuppliers();
       if (error) throw error;
       setSuppliers(data || []);
     } catch (err) {

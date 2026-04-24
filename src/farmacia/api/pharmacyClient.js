@@ -24,9 +24,37 @@ export const getMyCompanyId = async () => {
   return data.company_id;
 };
 
-// Función base para obtener productos del inventario médico
+// Función base para obtener productos del inventario médico (Catálogo Maestro)
 export const fetchPharmacyProducts = async () => {
-  return await getPharmacySchema().from('products').select('*');
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('products')
+    .select('*')
+    .eq('company_id', companyId)
+    .order('name');
+};
+
+// Obtener stock consolidado por producto y bodega
+export const fetchInventoryStock = async (warehouseId = null) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  if (warehouseId) {
+    // Si filtramos por bodega, usamos !inner para que el filtro de la tabla relacionada sea efectivo
+    return await getPharmacySchema()
+      .from('inventory_batches')
+      .select('*, product:product_id(*), location:location_id!inner(*)')
+      .eq('company_id', companyId)
+      .eq('location.warehouse_id', warehouseId);
+  }
+
+  // Si no hay bodega, traemos todo el stock de la empresa (útil para "Otros Locales")
+  return await getPharmacySchema()
+    .from('inventory_batches')
+    .select('*, product:product_id(*), location:location_id(*)')
+    .eq('company_id', companyId);
 };
 
 // Obtener catálogo de pacientes
@@ -40,6 +68,18 @@ export const fetchPrescriptions = async () => {
 };
 
 // Crear una nueva receta médica con items (Transaccional con Inyección de Company ID)
+export const fetchWarehouses = async () => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+  return await getPharmacySchema().from('warehouses').select('*').eq('company_id', companyId).order('name');
+};
+
+export const fetchLocations = async () => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+  return await getPharmacySchema().from('locations').select('*, warehouse:warehouse_id(*)').eq('company_id', companyId).order('name');
+};
+
 export const createPrescriptionWithItems = async (prescriptionData, items) => {
   const schema = getPharmacySchema();
   
@@ -143,8 +183,14 @@ export const findPendingPrescription = async (folio) => {
 
 // --- ÓRDENES DE COMPRA (LOGÍSTICA) ---
 export const fetchSuppliers = async () => {
-  // Ahora los proveedores pertenecen al esquema 'pharmacy' (aislamiento del módulo)
-  return await getPharmacySchema().from('suppliers').select('*').order('created_at', { ascending: false });
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+  
+  return await getPharmacySchema()
+    .from('suppliers')
+    .select('*')
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false });
 };
 
 export const getCurrentUserId = async () => {
@@ -153,11 +199,20 @@ export const getCurrentUserId = async () => {
   return user.id;
 };
 
-export const fetchPurchaseOrders = async () => {
-  return await getPharmacySchema()
+export const fetchPurchaseOrders = async (warehouseId = null) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let query = getPharmacySchema()
     .from('purchase_orders')
     .select('*, supplier:supplier_id(*)')
-    .order('created_at', { ascending: false });
+    .eq('company_id', companyId);
+  
+  if (warehouseId) {
+    query = query.eq('warehouse_id', warehouseId);
+  }
+
+  return await query.order('created_at', { ascending: false });
 };
 
 export const fetchPurchaseOrderItems = async (purchaseOrderId) => {
@@ -183,17 +238,20 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
   const userId = await getCurrentUserId();
   if (!userId) throw new Error("No se pudo obtener el usuario actual.");
 
-  // 1. Get QUARANTINE location
+  if (!receiptData.warehouse_id) throw new Error("Debe seleccionar una bodega para la recepción.");
+
+  // 1. Get QUARANTINE location for the selected warehouse
   const { data: locData, error: locError } = await schema
     .from('locations')
     .select('id')
     .eq('company_id', companyId)
+    .eq('warehouse_id', receiptData.warehouse_id)
     .eq('location_type', 'QUARANTINE')
     .limit(1)
     .maybeSingle();
 
   if (locError) throw new Error("Error obteniendo ubicación QUARANTINE: " + locError.message);
-  if (!locData) throw new Error("No se encontró la ubicación de Cuarentena para esta empresa. Contacte a soporte.");
+  if (!locData) throw new Error("No se encontró la ubicación de Cuarentena (QUARANTINE) para la bodega seleccionada. Cree una antes de recepcionar.");
   const locationId = locData.id;
 
   const itemUpdates = {};
@@ -251,8 +309,10 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
 
     // 2. Prepare Movements using the inserted batch IDs
     const movementsToInsert = insertedBatches.map((insertedBatch, index) => {
-      // Correlate with original data for unit_cost
+      // Correlate with original data for unit_cost and conversion_factor
       const originalBatch = batchesData[index];
+      const factor = Number(originalBatch.conversion_factor) || 1;
+      const realUnitCost = (originalBatch?.unit_cost || 0) / factor;
 
       return {
         company_id: companyId,
@@ -263,7 +323,7 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
         to_location_id: locationId,
         movement_type: 'IN_PURCHASE',
         quantity: insertedBatch.initial_quantity,
-        unit_cost: originalBatch?.unit_cost || 0,
+        unit_cost: realUnitCost,
         receipt_id: receipt.id,
         notes: `Lote ${insertedBatch.batch_number} - OC ${poId}`
       };
@@ -282,7 +342,7 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
 
     const { data: poItem, error: poItemErr } = await schema
       .from('purchase_order_items')
-      .select('quantity_received')
+      .select('quantity_received, unit_cost, conversion_factor')
       .eq('id', poItemId)
       .single();
     if (poItemErr) throw poItemErr;
@@ -297,15 +357,40 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
 
     const { data: product, error: prodErr } = await schema
       .from('products')
-      .select('stock_quantity')
+      .select('stock_quantity, last_cost, average_cost')
       .eq('id', updateData.product_id)
       .single();
     if (prodErr) throw prodErr;
 
-    const newStock = Number(product.stock_quantity || 0) + updateData.fractionated_total;
+    const oldStock = Number(product.stock_quantity || 0);
+    const newStockAdded = updateData.fractionated_total;
+    const totalStock = oldStock + newStockAdded;
+    const oldAvgCost = Number(product.average_cost || 0);
+
+    const productUpdates = { 
+      stock_quantity: totalStock, 
+      updated_by: userId 
+    };
+
+    const realUnitCost = Number(poItem.unit_cost || 0) / (Number(poItem.conversion_factor) || 1);
+
+    if (realUnitCost > 0) {
+      productUpdates.last_cost = realUnitCost;
+      
+      // Cálculo de Precio Promedio Ponderado (PPP)
+      if (oldStock <= 0) {
+        // Si no hay stock previo, el promedio es el costo actual
+        productUpdates.average_cost = realUnitCost;
+      } else {
+        // Fórmula: ((Stock Antiguo * Costo Prom Antiguo) + (Stock Nuevo * Costo Nuevo)) / Stock Total
+        const weightedAvg = ((oldStock * oldAvgCost) + (newStockAdded * realUnitCost)) / totalStock;
+        productUpdates.average_cost = weightedAvg;
+      }
+    }
+
     const { error: updProdErr } = await schema
       .from('products')
-      .update({ stock_quantity: newStock, updated_by: userId })
+      .update(productUpdates)
       .eq('id', updateData.product_id);
     if (updProdErr) throw updProdErr;
   }
@@ -375,4 +460,179 @@ export const createPurchaseOrderWithItems = async (headerData, items) => {
   if (itemsError) throw itemsError;
 
   return header;
+};
+
+// --- MÓDULO LOGÍSTICO (WMS) ---
+/**
+ * Procesa una operación de traspaso o reserva según el destino.
+ * Caso A: Mismo Local -> Acomodo Inmediato (Update stock direct)
+ * Caso B: Distinto Local -> Reserva Inter-Sucursal (Transfer Order)
+ */
+export const createTransferRequest = async (transferData, cartItems) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  if (!companyId) throw new Error("Company ID no encontrado.");
+
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !user) throw new Error("Usuario no autenticado.");
+
+  const isInternal = transferData.source_warehouse_id === transferData.dest_warehouse_id;
+
+  if (isInternal) {
+    // CASO A: Acomodo Inmediato (Putaway Directo)
+    for (const item of cartItems) {
+      const { batch, transferQuantity, dest_location_id } = item;
+      const finalDest = dest_location_id || transferData.dest_location_id;
+
+      // 1. Restar del origen
+      const { error: subErr } = await schema
+        .from('inventory_batches')
+        .update({ current_quantity: batch.current_quantity - transferQuantity })
+        .eq('id', batch.id);
+      if (subErr) throw new Error(`Error restando stock origen (${batch.batch_number}): ${subErr.message}`);
+
+      // 2. Sumar al destino (Upsert basado en lote/producto/ubicacion)
+      // Buscamos si ya existe el lote en la ubicación destino
+      const { data: existingBatch, error: findErr } = await schema
+        .from('inventory_batches')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('product_id', batch.product_id)
+        .eq('location_id', finalDest)
+        .eq('batch_number', batch.batch_number)
+        .maybeSingle();
+
+      if (findErr) throw findErr;
+
+      if (existingBatch) {
+        const { error: addErr } = await schema
+          .from('inventory_batches')
+          .update({ current_quantity: Number(existingBatch.current_quantity) + transferQuantity })
+          .eq('id', existingBatch.id);
+        if (addErr) throw addErr;
+      } else {
+        const { error: insErr } = await schema
+          .from('inventory_batches')
+          .insert([{
+            company_id: companyId,
+            product_id: batch.product_id,
+            location_id: finalDest,
+            batch_number: batch.batch_number,
+            expiry_date: batch.expiry_date,
+            initial_quantity: transferQuantity,
+            current_quantity: transferQuantity,
+            po_id: batch.po_id
+          }]);
+        if (insErr) throw insErr;
+      }
+
+      // 3. Registrar Movimiento
+      await schema
+        .from('inventory_movements')
+        .insert([{
+          company_id: companyId,
+          product_id: batch.product_id,
+          batch_id: batch.id,
+          batch_number: batch.batch_number,
+          from_location_id: transferData.source_location_id,
+          to_location_id: finalDest,
+          movement_type: 'INTERNAL_TRANSFER',
+          quantity: transferQuantity,
+          created_by: user.id,
+          notes: `Acomodo interno: ${transferData.notes || ''}`
+          // El reference_folio se genera por trigger o se omite en acomodos simples si no hay secuencia expuesta
+        }]);
+    }
+    return { type: 'ACOMODO', message: 'Acomodo interno finalizado correctamente.' };
+  } else {
+    // CASO B: Reserva Inter-Sucursal
+    // 1. Crear cabecera (transfer_requests) - Solicitamos el folio generado
+    const { data: header, error: headerErr } = await schema
+      .from('transfer_requests')
+      .insert([{
+        company_id: companyId,
+        source_warehouse_id: transferData.source_warehouse_id,
+        destination_warehouse_id: transferData.dest_warehouse_id,
+        notes: transferData.notes || 'Reserva de traspaso generada desde consola',
+        status: 'PENDING',
+        requested_by: user.id
+      }])
+      .select('id, folio')
+      .single();
+
+    if (headerErr) throw new Error("Error creando reserva: " + headerErr.message);
+
+    // 2. Insertar items (transfer_request_items)
+    const itemsToInsert = cartItems.map(item => ({
+      company_id: companyId,
+      transfer_request_id: header.id,
+      product_id: item.batch.product_id,
+      batch_id: item.batch.id,
+      source_location_id: transferData.source_location_id,
+      destination_location_id: item.dest_location_id || transferData.dest_location_id,
+      quantity: item.transferQuantity,
+      status: 'PENDING'
+    }));
+
+    const { error: itemsErr } = await schema
+      .from('transfer_request_items')
+      .insert(itemsToInsert);
+
+    if (itemsErr) throw new Error("Error creando detalle de reserva: " + itemsErr.message);
+
+    return { type: 'RESERVA', folio: header.folio, message: `Reserva ${header.folio} generada. Pendiente de recepción en destino.` };
+  }
+};
+export const createWarehouse = async (warehouseData) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+  if (!companyId) throw new Error("No company id");
+
+  // 1. Create warehouse
+  const { data: warehouse, error } = await schema
+    .from('warehouses')
+    .insert([{
+      ...warehouseData,
+      company_id: companyId,
+      created_by: userId
+    }])
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  // 2. Create default locations (Bodegas base)
+  const defaultLocations = [
+    { name: 'CUARENTENA (INBOUND)', location_type: 'QUARANTINE', warehouse_id: warehouse.id, company_id: companyId },
+    { name: 'STORAGE (ALMACENAMIENTO)', location_type: 'STORAGE', warehouse_id: warehouse.id, company_id: companyId },
+    { name: 'SALA DE VENTAS', location_type: 'SALES', warehouse_id: warehouse.id, company_id: companyId }
+  ];
+
+  const { error: locError } = await schema
+    .from('locations')
+    .insert(defaultLocations);
+
+  if (locError) throw locError;
+
+  return warehouse;
+};
+
+export const updateWarehouse = async (id, warehouseData) => {
+  const { data, error } = await getPharmacySchema()
+    .from('warehouses')
+    .update(warehouseData)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+};
+
+export const deleteWarehouse = async (id) => {
+  const { error } = await getPharmacySchema()
+    .from('warehouses')
+    .update({ is_active: false })
+    .eq('id', id);
+  if (error) throw error;
 };

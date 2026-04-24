@@ -12,13 +12,15 @@ import {
   fetchPurchaseOrderItems,
   createPurchaseOrderWithItems,
   receivePurchaseOrder,
-  fetchOrderReceipts
+  fetchOrderReceipts,
+  fetchWarehouses
 } from '../api/pharmacyClient';
 import SearchableSelect from '../components/SearchableSelect';
 
-const BRAND_PRIMARY = '#4C3073';
+import { useSucursal } from '../context/SucursalContext';
 
 export default function OrdenesCompra() {
+    const { activeWarehouse } = useSucursal();
     const [purchaseOrders, setPurchaseOrders] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
     const [products, setProducts] = useState([]);
@@ -40,20 +42,27 @@ export default function OrdenesCompra() {
     const [selectedOrderItems, setSelectedOrderItems] = useState([]);
     const [orderReceipts, setOrderReceipts] = useState([]);
     const [receiveItems, setReceiveItems] = useState([]);
+    const [warehouses, setWarehouses] = useState([]);
     
-    const [receiptData, setReceiptData] = useState({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '' });
+    const [receiptData, setReceiptData] = useState({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '', warehouse_id: '' });
     
     const [modalLoading, setModalLoading] = useState(false);
 
     const fetchInitialData = useCallback(async () => {
+        if (!activeWarehouse?.id) return;
+
         try {
             setLoading(true);
             const { data: { user } } = await supabase.auth.getUser();
             if (user) setUserId(user.id);
 
             if (view === 'list') {
-                const res = await fetchPurchaseOrders();
-                setPurchaseOrders(res.data || []);
+                const [poRes, whRes] = await Promise.all([
+                    fetchPurchaseOrders(activeWarehouse.id),
+                    fetchWarehouses()
+                ]);
+                setPurchaseOrders(poRes.data || []);
+                setWarehouses(whRes.data || []);
             } else {
                 const [supRes, prodRes] = await Promise.all([
                     fetchSuppliers(),
@@ -67,7 +76,7 @@ export default function OrdenesCompra() {
         } finally {
             setLoading(false);
         }
-    }, [view]);
+    }, [view, activeWarehouse?.id]);
 
     useEffect(() => {
         fetchInitialData();
@@ -77,12 +86,14 @@ export default function OrdenesCompra() {
         const styles = {
             'PENDING': 'bg-indigo-50 text-indigo-700 border-indigo-100',
             'RECEIVED': 'bg-green-50 text-green-700 border-green-100',
-            'CANCELLED': 'bg-red-50 text-red-700 border-red-100'
+            'CANCELLED': 'bg-red-50 text-red-700 border-red-100',
+            'PARTIAL': 'bg-orange-50 text-orange-700 border-orange-100'
         };
         const labels = {
             'PENDING': 'Emitida',
             'RECEIVED': 'Recibida',
-            'CANCELLED': 'Cancelada'
+            'CANCELLED': 'Cancelada',
+            'PARTIAL': 'Parcial'
         };
         return (
             <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold uppercase tracking-wider border ${styles[status]}`}>
@@ -126,7 +137,15 @@ export default function OrdenesCompra() {
                 batches: [{ entered_quantity: '', batch_number: '', expiry_date: '' }]
             }));
             setReceiveItems(items);
-            setReceiptData({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '', supplier_id: po.supplier_id });
+            
+            // Auto-select active warehouse from context
+            setReceiptData({ 
+                document_type: 'GUIA_DESPACHO', 
+                document_number: '', 
+                notes: '', 
+                supplier_id: po.supplier_id, 
+                warehouse_id: activeWarehouse?.id || '' 
+            });
             setView('receive');
         } catch (error) {
             console.error('Error cargando orden para recepción:', error);
@@ -166,6 +185,7 @@ export default function OrdenesCompra() {
     };
 
     const handleReceiveOrder = async () => {
+        if (!receiptData.warehouse_id) return alert('Debe seleccionar una bodega de destino.');
         if (!receiptData.document_number) return alert('Ingrese el Número de Documento.');
 
         const batchesData = [];
@@ -238,7 +258,7 @@ export default function OrdenesCompra() {
                     product_id: product.id,
                     name: product.name,
                     quantity: 1,
-                    unit_cost: product.unit_price ?? product.cost_price ?? 0,
+                    unit_cost: product.last_cost ? (product.last_cost * (product.conversion_factor || 1)) : 0,
                     conversion_factor: product.conversion_factor || 1
                 }]
             };
@@ -287,6 +307,7 @@ export default function OrdenesCompra() {
                 total_amount: totals.total,
                 status: 'PENDING',
                 payment_terms_days: currentPO.payment_terms_days,
+                warehouse_id: activeWarehouse.id,
                 created_by: userId
             };
 
@@ -359,20 +380,34 @@ export default function OrdenesCompra() {
                                         <p className="text-gray-500 font-medium mt-1">{selectedOrder.supplier?.commercial_name || selectedOrder.supplier?.legal_name || 'Sin proveedor'}</p>
                                     </div>
                                 </div>
-                                <div className="grid grid-cols-2 gap-x-10 gap-y-4 text-xs text-gray-600 mb-6 bg-white p-6 shadow-sm rounded-sm border border-gray-200">
-                                    <div className="grid grid-cols-3 items-center">
-                                        <label className="text-gray-500 font-bold text-[11px] text-right pr-4 uppercase tracking-tighter">Tipo Documento</label>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-6 bg-white shadow-sm rounded-sm border border-gray-200">
+                                    <div className="grid grid-cols-3 items-center col-span-2 md:col-span-1">
+                                        <label className="text-gray-500 font-bold text-[11px] text-right pr-4 uppercase tracking-tighter">Bodega Destino</label>
+                                        <select 
+                                            value={receiptData.warehouse_id}
+                                            onChange={e => setReceiptData({...receiptData, warehouse_id: e.target.value})}
+                                            className="col-span-2 w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] font-bold text-[#4C3073]"
+                                        >
+                                            <option value="">Seleccione...</option>
+                                            {warehouses.filter(w => w.is_active).map(w => (
+                                                <option key={w.id} value={w.id}>{w.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="grid grid-cols-3 items-center col-span-2 md:col-span-1">
+                                        <label className="text-gray-500 font-bold text-[11px] text-right pr-4 uppercase tracking-tighter">Tipo Doc.</label>
                                         <select 
                                             value={receiptData.document_type}
                                             onChange={e => setReceiptData({...receiptData, document_type: e.target.value})}
-                                            className="col-span-2 w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
+                                            className="col-span-2 w-full rounded-sm border border-gray-300 bg-gray-50 px-2 py-1.5 text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] font-bold text-[#4C3073]"
                                         >
-                                            <option value="GUIA_DESPACHO">Guía de Despacho</option>
-                                            <option value="FACTURA">Factura de Compra</option>
+                                            <option value="GUIA_DESPACHO">Guía Despacho</option>
+                                            <option value="FACTURA">Factura</option>
                                             <option value="BOLETA">Boleta</option>
+                                            <option value="AJUSTE">Ajuste</option>
                                         </select>
                                     </div>
-                                    <div className="grid grid-cols-3 items-center">
+                                    <div className="grid grid-cols-3 items-center col-span-2 md:col-span-1">
                                         <label className="text-gray-500 font-bold text-[11px] text-right pr-4 uppercase tracking-tighter">N° Documento</label>
                                         <input 
                                             type="text"
@@ -403,7 +438,6 @@ export default function OrdenesCompra() {
                                             const factor = item.conversion_factor || item.product?.conversion_factor || 1;
                                             const expectedUnits = item.quantity * factor;
                                             const lineEntered = item.batches.reduce((sum, b) => sum + Number(b.entered_quantity || 0), 0);
-                                            const lineSubtotal = lineEntered * Number(item.unit_cost || 0);
 
                                             return (
                                                 <div key={idx} className="rounded-md border border-gray-100 bg-gray-50 p-4 shadow-sm relative overflow-hidden">

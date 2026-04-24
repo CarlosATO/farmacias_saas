@@ -11,6 +11,12 @@ const PuntoDeVenta = lazy(() => import('./farmacia/pages/PuntoDeVenta'));
 const OrdenesCompra = lazy(() => import('./farmacia/pages/OrdenesCompra'));
 const ProveedoresMedicos = lazy(() => import('./modules/farmacia/pages/ProveedoresMedicos'));
 const CatalogoMedicamentos = lazy(() => import('./modules/farmacia/pages/CatalogoMedicamentos'));
+const MapaLogistico = lazy(() => import('./farmacia/pages/MapaLogistico'));
+const GestorUbicaciones = lazy(() => import('./farmacia/pages/GestorUbicaciones'));
+const TraspasosInternos = lazy(() => import('./farmacia/pages/TraspasosInternos'));
+const AdminSucursales = lazy(() => import('./farmacia/pages/AdminSucursales'));
+import { SucursalProvider } from './farmacia/context/SucursalContext';
+import GestionPrecios from './farmacia/pages/GestionPrecios';
 
 const PageLoader = () => (
   <div className="h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -72,19 +78,26 @@ const PrivateRoute = ({ children }) => {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<PrivateRoute><Suspense fallback={<PageLoader />}><FarmaciaLayout /></Suspense></PrivateRoute>}>
-          <Route index element={<Suspense fallback={<PageLoader />}><FarmaciaDashboard /></Suspense>} />
-          <Route path="inventario" element={<Suspense fallback={<PageLoader />}><InventarioMedico /></Suspense>} />
-          <Route path="recetas" element={<Suspense fallback={<PageLoader />}><Recetas /></Suspense>} />
-          <Route path="pacientes" element={<Suspense fallback={<PageLoader />}><Pacientes /></Suspense>} />
-          <Route path="pos" element={<Suspense fallback={<PageLoader />}><PuntoDeVenta /></Suspense>} />
-          <Route path="logistica" element={<Suspense fallback={<PageLoader />}><OrdenesCompra /></Suspense>} />
-          <Route path="administracion/proveedores" element={<Suspense fallback={<PageLoader />}><ProveedoresMedicos /></Suspense>} />
-          <Route path="administracion/medicamentos" element={<Suspense fallback={<PageLoader />}><CatalogoMedicamentos /></Suspense>} />
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <SucursalProvider>
+        <Routes>
+          <Route path="/" element={<PrivateRoute><Suspense fallback={<PageLoader />}><FarmaciaLayout /></Suspense></PrivateRoute>}>
+            <Route index element={<Suspense fallback={<PageLoader />}><FarmaciaDashboard /></Suspense>} />
+            <Route path="inventario" element={<Suspense fallback={<PageLoader />}><InventarioMedico /></Suspense>} />
+            <Route path="recetas" element={<Suspense fallback={<PageLoader />}><Recetas /></Suspense>} />
+            <Route path="pacientes" element={<Suspense fallback={<PageLoader />}><Pacientes /></Suspense>} />
+            <Route path="pos" element={<Suspense fallback={<PageLoader />}><PuntoDeVenta /></Suspense>} />
+            <Route path="logistica" element={<Suspense fallback={<PageLoader />}><OrdenesCompra /></Suspense>} />
+            <Route path="administracion/proveedores" element={<Suspense fallback={<PageLoader />}><ProveedoresMedicos /></Suspense>} />
+            <Route path="administracion/medicamentos" element={<Suspense fallback={<PageLoader />}><CatalogoMedicamentos /></Suspense>} />
+            <Route path="mapa-logistico" element={<Suspense fallback={<PageLoader />}><MapaLogistico /></Suspense>} />
+            <Route path="mapa-logistico/gestor/:locationId" element={<Suspense fallback={<PageLoader />}><GestorUbicaciones /></Suspense>} />
+            <Route path="traspasos" element={<Suspense fallback={<PageLoader />}><TraspasosInternos /></Suspense>} />
+            <Route path="sucursales" element={<Suspense fallback={<PageLoader />}><AdminSucursales /></Suspense>} />
+            <Route path="pricing" element={<GestionPrecios />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </SucursalProvider>
     </BrowserRouter>
   );
 }

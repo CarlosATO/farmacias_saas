@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronRight, ArrowLeft, Save, Pill, Search } from 'lucide-react';
-import { getPharmacySchema, getMyCompanyId, getCurrentUserId } from '../../../farmacia/api/pharmacyClient';
+import { fetchPharmacyProducts, getPharmacySchema, getMyCompanyId, getCurrentUserId } from '../../../farmacia/api/pharmacyClient';
 
 const SALE_CONDITIONS = [
   { value: 'VD', label: 'VD - Venta Directa' },
@@ -27,15 +27,17 @@ export default function CatalogoMedicamentos() {
     purchase_uom: '',
     sale_uom: '',
     conversion_factor: 1,
-    barcode_purchase: ''
+    barcode_purchase: '',
+    family: '',
+    subfamily: '',
+    prescription_type: 'VENTA_LIBRE'
   };
   const [form, setForm] = useState(emptyForm);
 
   const fetchList = async () => {
     setLoading(true);
     try {
-      const schema = getPharmacySchema();
-      const { data, error } = await schema.from('products').select('*').order('created_at', { ascending: false });
+      const { data, error } = await fetchPharmacyProducts(); // Global/Master data
       if (error) throw error;
       setProducts(data || []);
     } catch (err) {
@@ -88,6 +90,9 @@ export default function CatalogoMedicamentos() {
         sale_uom: (form.sale_uom || '').toUpperCase(),
         conversion_factor: Number(form.conversion_factor) || 1,
         barcode_purchase: form.barcode_purchase || '',
+        family: (form.family || '').toUpperCase(),
+        subfamily: (form.subfamily || '').toUpperCase(),
+        prescription_type: form.prescription_type,
         company_id: companyId
       };
 
@@ -103,6 +108,7 @@ export default function CatalogoMedicamentos() {
       }
 
       resetForm();
+      setView('list');
       await fetchList();
     } catch (err) {
       console.error(err);
@@ -125,7 +131,10 @@ export default function CatalogoMedicamentos() {
       purchase_uom: row.purchase_uom || '',
       sale_uom: row.sale_uom || '',
       conversion_factor: row.conversion_factor || 1,
-      barcode_purchase: row.barcode_purchase || ''
+      barcode_purchase: row.barcode_purchase || '',
+      family: row.family || '',
+      subfamily: row.subfamily || '',
+      prescription_type: row.prescription_type || 'VENTA_LIBRE'
     });
     setActiveTab('ident');
     setView('form');
@@ -206,6 +215,16 @@ export default function CatalogoMedicamentos() {
                                         <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Laboratorio Fabricante</label>
                                         <input placeholder="Laboratorio" value={form.laboratory_name} onChange={e => setUpper('laboratory_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
                                     </div>
+                                    <div className="col-span-1 sm:col-span-2 grid grid-cols-2 gap-6 pt-4 border-t border-gray-100">
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Familia</label>
+                                            <input placeholder="Ej: Analgésicos" value={form.family} onChange={e => setUpper('family', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Sub-familia</label>
+                                            <input placeholder="Ej: Adulto" value={form.subfamily} onChange={e => setUpper('subfamily', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                                        </div>
+                                    </div>
                                 </div>
                             )}
 
@@ -216,9 +235,18 @@ export default function CatalogoMedicamentos() {
                                         <input placeholder="Registro ISP" value={form.registro_sanitario} onChange={e => setUpper('registro_sanitario', e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
                                     </div>
                                     <div>
-                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Condición de Venta</label>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Condición de Venta (Resumen)</label>
                                         <select value={form.sale_condition} onChange={e => setForm({...form, sale_condition: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none bg-white">
                                             {SALE_CONDITIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Tipo de Receta (Control Financiero/Legal)</label>
+                                        <select value={form.prescription_type} onChange={e => setForm({...form, prescription_type: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none bg-white font-bold text-[#4C3073]">
+                                            <option value="VENTA_LIBRE">VENTA LIBRE</option>
+                                            <option value="RECETA_SIMPLE">RECETA SIMPLE</option>
+                                            <option value="RECETA_RETENIDA">RECETA RETENIDA</option>
+                                            <option value="RECETA_CHEQUE">RECETA CHEQUE</option>
                                         </select>
                                     </div>
                                 </div>
