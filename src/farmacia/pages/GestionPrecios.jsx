@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Search, Loader2, DollarSign, TrendingUp, TrendingDown, ChevronRight, AlertCircle, Filter, CheckSquare, Square, Calculator, Save, Info, Tag, MapPin } from 'lucide-react';
-import { fetchPharmacyProducts, getPharmacySchema } from '../api/pharmacyClient';
+import { fetchPharmacyProducts, fetchWarehouses, fetchPricesByWarehouse, updateProductPrice, getMyCompanyId, getPharmacySchema } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 
 export default function GestionPrecios() {
@@ -25,26 +25,52 @@ export default function GestionPrecios() {
     const [familySearch, setFamilySearch] = useState('');
     const [labSearch, setLabSearch] = useState('');
 
-    const loadProducts = useCallback(async () => {
+    const [warehouses, setWarehouses] = useState([]);
+    const [selectedWarehouseId, setSelectedWarehouseId] = useState(null);
+
+    const loadData = useCallback(async () => {
+        if (!activeWarehouse?.id) return;
         try {
             setLoading(true);
-            // 1. Fetch Global Master Products (SaaS Isolated)
-            const { data, error } = await fetchPharmacyProducts();
-            if (error) throw error;
-            
-            // 2. Data enrichment logic (The 'Cruce') would go here
-            // For now, restore the master list to fix the critical view error
-            setProducts(data || []);
+            // 1. Fetch Warehouses for the selector
+            const { data: wRes } = await fetchWarehouses();
+            setWarehouses(wRes || []);
+
+            // 2. Fetch Global Master Products
+            const { data: prodData, error: prodErr } = await fetchPharmacyProducts();
+            if (prodErr) throw prodErr;
+
+            // 3. Fetch Prices for the active Warehouse
+            const { data: priceData, error: priceErr } = await fetchPricesByWarehouse(activeWarehouse.id);
+            if (priceErr) throw priceErr;
+
+            const priceMap = {};
+            priceData?.forEach(item => {
+                priceMap[item.product_id] = item.price_sale;
+            });
+
+            // 4. Enrich products with local price
+            const enriched = (prodData || []).map(p => ({
+                ...p,
+                price_sale: priceMap[p.id] || 0
+            }));
+
+            setProducts(enriched);
         } catch (err) {
             console.error("Error cargando precios:", err);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [activeWarehouse?.id]);
 
+    // Reactividad: Al cambiar de sucursal, recargar y limpiar estados temporales
     useEffect(() => {
-        loadProducts();
-    }, [loadProducts]);
+        if (activeWarehouse?.id) {
+            loadData();
+            setSuggestedPrices({}); // Limpiar sugerencias previas
+            setSelectedIds(new Set()); // Limpiar selección previa
+        }
+    }, [activeWarehouse?.id, loadData]);
 
     // Clear suggestions when switching strategy to avoid confusion
     useEffect(() => {
@@ -60,27 +86,72 @@ export default function GestionPrecios() {
     };
 
     const handleUpdatePrice = async (productId, newPrice) => {
+        // Validación estricta antes de cualquier operación
+        if (!activeWarehouse?.id) {
+            alert("Error: No se ha detectado el local activo.");
+            return;
+        }
+
+        // Misión 1: Sanitizar precio — rechazar NaN antes de tocar la BD
+        const parsedPrice = Math.round(Number(newPrice));
+        if (isNaN(parsedPrice) || parsedPrice < 0) {
+            console.warn("Precio inválido o NaN detectado, abortando guardado.", { newPrice });
+            return;
+        }
+
         try {
-            const { error } = await getPharmacySchema()
-                .from('products')
-                .update({ unit_price: Number(newPrice) })
-                .eq('id', productId);
-            
-            if (error) throw error;
+            const companyId = await getMyCompanyId();
+            if (!companyId) throw new Error("Error: No hay Company ID.");
+
+            const warehouseId = activeWarehouse.id;
+
+            // 1. Intentar actualizar el registro existente
+            const updatePayload = { price_sale: parsedPrice };
+            console.log("INTENTANDO UPDATE:", { product_id: productId, warehouse_id: warehouseId, ...updatePayload });
+
+            const { data: updatedData, error: updateErr } = await getPharmacySchema()
+                .from('product_prices')
+                .update(updatePayload)
+                .eq('product_id', productId)
+                .eq('warehouse_id', warehouseId)
+                .select();
+
+            if (updateErr) {
+                console.error("Fallo BD (update):", updateErr.message, updateErr.details);
+                throw updateErr;
+            }
+
+            // 2. Si no existía (data vacío), hacer el insert
+            if (!updatedData || updatedData.length === 0) {
+                const insertPayload = {
+                    company_id: companyId,
+                    product_id: productId,
+                    warehouse_id: warehouseId,
+                    price_sale: parsedPrice
+                };
+                console.log("INTENTANDO INSERT:", insertPayload);
+
+                const { error: insertErr } = await getPharmacySchema()
+                    .from('product_prices')
+                    .insert([insertPayload]);
+
+                if (insertErr) {
+                    console.error("Fallo BD (insert):", insertErr.message, insertErr.details);
+                    throw insertErr;
+                }
+            }
             
             setProducts(prev => prev.map(p => 
-                p.id === productId ? { ...p, unit_price: Number(newPrice) } : p
+                p.id === productId ? { ...p, price_sale: parsedPrice } : p
             ));
-            
-            // Clear suggestion if saved
             setSuggestedPrices(prev => {
                 const next = { ...prev };
                 delete next[productId];
                 return next;
             });
         } catch (err) {
-            console.error("Error actualizando precio:", err);
-            alert("No se pudo actualizar el precio.");
+            console.error("Error actualizando precio:", err.message, err);
+            alert("No se pudo actualizar el precio local.");
         }
     };
 
@@ -117,7 +188,7 @@ export default function GestionPrecios() {
             const matchesPrescription = filters.prescription === 'ALL' || p.prescription_type === filters.prescription;
             
             const currentCost = strategy === 'average' ? (p.average_cost || 0) : (p.last_cost || 0);
-            const margin = calculateMargin(p.unit_price, currentCost);
+            const margin = calculateMargin(p.price_sale, currentCost);
             const matchesCritical = !showCriticalOnly || margin < 25;
 
             return matchesSearch && matchesFamily && matchesLab && matchesPrescription && matchesCritical;
@@ -144,8 +215,11 @@ export default function GestionPrecios() {
         filteredProducts.forEach(p => {
             if (selectedIds.has(p.id)) {
                 const cost = strategy === 'average' ? (p.average_cost || 0) : (p.last_cost || 0);
-                if (cost > 0) {
-                    newSuggestions[p.id] = Math.ceil(getTargetPrice(cost, targetMargin));
+                // Misión 3: No sugerir si no hay costo base (evita NaN/Infinity)
+                if (cost <= 0) return;
+                const suggested = Math.ceil(getTargetPrice(cost, targetMargin));
+                if (!isNaN(suggested) && isFinite(suggested) && suggested > 0) {
+                    newSuggestions[p.id] = suggested;
                 }
             }
         });
@@ -153,33 +227,77 @@ export default function GestionPrecios() {
     };
 
     const handleApplyBulk = async () => {
-        // Map over selected IDs and find those that have a suggestion
         const idsToUpdate = Array.from(selectedIds).filter(id => suggestedPrices[id] !== undefined);
-        
-        if (idsToUpdate.length === 0) {
-            alert("No hay precios sugeridos calculados para los ítems seleccionados.");
+        if (idsToUpdate.length === 0) return;
+
+        // Validación estricta antes de cualquier operación
+        if (!activeWarehouse?.id) {
+            alert("Error: No se ha detectado el local activo.");
             return;
         }
-        
-        if (!confirm(`¿Aplicar ${idsToUpdate.length} nuevos precios a la base de datos?`)) return;
+        if (!confirm(`¿Aplicar ${idsToUpdate.length} nuevos precios para ${activeWarehouse.name}?`)) return;
 
         setLoading(true);
         try {
+            const companyId = await getMyCompanyId();
+            if (!companyId) throw new Error("Error: No hay Company ID.");
+
+            const warehouseId = activeWarehouse.id;
             const schema = getPharmacySchema();
-            // We do individual updates for now (Supabase doesn't have a bulk update by ID easily in a single call without RPC)
+
             for (const id of idsToUpdate) {
-                const newPrice = suggestedPrices[id];
-                const { error } = await schema.from('products').update({ unit_price: newPrice }).eq('id', id);
-                if (error) throw error;
+                // Misión 2: Sanitizar precio en cada iteración
+                const rawPrice = suggestedPrices[id];
+                const parsedPrice = Math.round(Number(rawPrice));
+                if (isNaN(parsedPrice) || parsedPrice < 0) {
+                    console.warn(`Precio inválido para producto ${id}, saltando...`, { rawPrice });
+                    continue; // Salta este producto y sigue con el resto
+                }
+
+                // 1. Intentar actualizar el registro existente
+                const updatePayload = { price_sale: parsedPrice };
+                console.log("INTENTANDO UPDATE:", { product_id: id, warehouse_id: warehouseId, ...updatePayload });
+
+                const { data: updatedData, error: updateErr } = await schema
+                    .from('product_prices')
+                    .update(updatePayload)
+                    .eq('product_id', id)
+                    .eq('warehouse_id', warehouseId)
+                    .select();
+
+                if (updateErr) {
+                    console.error(`Fallo BD (update) ID ${id}:`, updateErr.message, updateErr.details);
+                    throw updateErr;
+                }
+
+                // 2. Si no existía, insertar
+                if (!updatedData || updatedData.length === 0) {
+                    const insertPayload = {
+                        company_id: companyId,
+                        product_id: id,
+                        warehouse_id: warehouseId,
+                        price_sale: parsedPrice
+                    };
+                    console.log("INTENTANDO INSERT:", insertPayload);
+
+                    const { error: insertErr } = await schema
+                        .from('product_prices')
+                        .insert([insertPayload]);
+
+                    if (insertErr) {
+                        console.error(`Fallo BD (insert) ID ${id}:`, insertErr.message, insertErr.details);
+                        throw insertErr;
+                    }
+                }
             }
             
-            alert("Precios actualizados exitosamente.");
-            await loadProducts();
+            alert("Precios de sucursal actualizados exitosamente.");
+            await loadData();
             setSuggestedPrices({});
             setSelectedIds(new Set());
         } catch (err) {
-            console.error("Error en actualización masiva:", err);
-            alert("Hubo un error al aplicar los precios. Por favor, intente de nuevo.");
+            console.error("Error en actualización masiva:", err.message, err);
+            alert("Hubo un error al aplicar los precios.");
         } finally {
             setLoading(false);
         }
@@ -215,6 +333,16 @@ export default function GestionPrecios() {
                                 className="w-full pl-7 pr-2 py-1.5 border border-gray-100 rounded-sm text-[11px] outline-none bg-gray-50 focus:bg-white focus:border-[#4C3073] transition-all"
                             />
                         </div>
+
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-2">Sucursal / Local</label>
+                        <select 
+                            value={selectedWarehouseId || ''} 
+                            onChange={e => setSelectedWarehouseId(e.target.value)}
+                            className="w-full border border-gray-200 rounded-sm p-2 text-xs outline-none focus:border-[#4C3073] mb-6 bg-purple-50 font-bold"
+                        >
+                            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                        </select>
+
                         <select 
                             value={filters.family} 
                             onChange={e => setFilters(prev => ({ ...prev, family: e.target.value }))}
@@ -283,14 +411,6 @@ export default function GestionPrecios() {
                             <span>Gestión Gerencial</span>
                             <ChevronRight size={12} className="mx-1" />
                             <span className="text-gray-900">Precios y Márgenes</span>
-                        </div>
-
-                        <div className="flex items-center gap-2 bg-purple-50 border border-purple-100 px-3 py-1.5 rounded-sm">
-                            <MapPin size={14} className="text-[#4C3073]" />
-                            <div className="flex flex-col">
-                                <span className="text-[8px] font-black text-gray-400 uppercase leading-none">Local</span>
-                                <span className="text-[10px] font-black text-[#4C3073] uppercase">{activeWarehouse?.name || '---'}</span>
-                            </div>
                         </div>
                         
                         <div className="flex items-center gap-2">
@@ -388,7 +508,7 @@ export default function GestionPrecios() {
                             <tbody className="divide-y divide-gray-100">
                                 {filteredProducts.map(p => {
                                     const currentCost = strategy === 'average' ? (p.average_cost || 0) : (p.last_cost || 0);
-                                    const margin = calculateMargin(p.unit_price, currentCost);
+                                    const margin = calculateMargin(p.price_sale, currentCost);
                                     const isLowMargin = margin < 25;
                                     const suggestion = suggestedPrices[p.id];
                                     const suggestionMargin = suggestion ? calculateMargin(suggestion, currentCost) : null;
@@ -418,9 +538,13 @@ export default function GestionPrecios() {
                                                 <div className="relative inline-block w-full">
                                                     <input 
                                                         type="number"
-                                                        defaultValue={p.unit_price}
+                                                        value={p.price_sale}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            setProducts(prev => prev.map(item => item.id === p.id ? { ...item, price_sale: val } : item));
+                                                        }}
                                                         onBlur={(e) => handleUpdatePrice(p.id, e.target.value)}
-                                                        className={`w-full text-right bg-transparent border-b-2 border-transparent group-hover:border-gray-300 focus:border-[#4C3073] outline-none py-1 font-black text-sm ${Number(p.unit_price) === 0 ? 'text-red-500' : 'text-[#4C3073]'}`}
+                                                        className={`w-full text-right bg-transparent border-b-2 border-transparent group-hover:border-gray-300 focus:border-[#4C3073] outline-none py-1 font-black text-sm ${Number(p.price_sale) === 0 ? 'text-red-500' : 'text-[#4C3073]'}`}
                                                     />
                                                 </div>
                                             </td>

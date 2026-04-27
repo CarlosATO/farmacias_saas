@@ -36,6 +36,41 @@ export const fetchPharmacyProducts = async () => {
     .order('name');
 };
 
+// --- GESTIÓN DE PRECIOS POR SUCURSAL ---
+
+export const fetchPricesByWarehouse = async (warehouseId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+  
+  return await getPharmacySchema()
+    .from('product_prices')
+    .select('*')
+    .eq('warehouse_id', warehouseId)
+    .eq('company_id', companyId);
+};
+
+export const updateProductPrice = async (productId, warehouseId, newPrice) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { error: new Error("No company id") };
+
+  const { error } = await getPharmacySchema()
+    .from('product_prices')
+    .upsert({
+      company_id: companyId,
+      product_id: productId,
+      warehouse_id: warehouseId,
+      price_sale: Number(newPrice)
+    }, {
+      onConflict: 'product_id,warehouse_id'
+    });
+
+  if (error) {
+    console.error("[product_prices] Error BD Detalle:", error?.message, error?.details, error?.hint);
+    return { error };
+  }
+  return { error: null };
+};
+
 // ── Kardex: calcula el saldo actual tras un movimiento y lo guarda ────────────
 // Llama a esta función DESPUÉS de actualizar inventory_batches en cada movimiento.
 export const calculateBalanceAfter = async (schema, productId, locationId, movementId) => {
