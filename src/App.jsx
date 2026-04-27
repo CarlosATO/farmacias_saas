@@ -14,6 +14,8 @@ const CatalogoMedicamentos = lazy(() => import('./modules/farmacia/pages/Catalog
 const MapaLogistico = lazy(() => import('./farmacia/pages/MapaLogistico'));
 const GestorUbicaciones = lazy(() => import('./farmacia/pages/GestorUbicaciones'));
 const TraspasosInternos = lazy(() => import('./farmacia/pages/TraspasosInternos'));
+const RecepcionTraspasos = lazy(() => import('./farmacia/pages/RecepcionTraspasos'));
+const KardexProducto = lazy(() => import('./farmacia/pages/KardexProducto'));
 const AdminSucursales = lazy(() => import('./farmacia/pages/AdminSucursales'));
 import { SucursalProvider } from './farmacia/context/SucursalContext';
 import GestionPrecios from './farmacia/pages/GestionPrecios';
@@ -92,6 +94,8 @@ export default function App() {
             <Route path="mapa-logistico" element={<Suspense fallback={<PageLoader />}><MapaLogistico /></Suspense>} />
             <Route path="mapa-logistico/gestor/:locationId" element={<Suspense fallback={<PageLoader />}><GestorUbicaciones /></Suspense>} />
             <Route path="traspasos" element={<Suspense fallback={<PageLoader />}><TraspasosInternos /></Suspense>} />
+            <Route path="recepcion-traspasos" element={<Suspense fallback={<PageLoader />}><RecepcionTraspasos /></Suspense>} />
+            <Route path="kardex/:productId" element={<Suspense fallback={<PageLoader />}><KardexProducto /></Suspense>} />
             <Route path="sucursales" element={<Suspense fallback={<PageLoader />}><AdminSucursales /></Suspense>} />
             <Route path="pricing" element={<GestionPrecios />} />
           </Route>

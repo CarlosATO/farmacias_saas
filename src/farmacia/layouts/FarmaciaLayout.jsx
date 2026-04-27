@@ -45,6 +45,7 @@ const buildRibbonTabs = () => {
             items: [
                 { to: '/logistica', label: 'Órdenes de Compra', icon: Truck },
                 { to: '/traspasos', label: 'Consola Traspasos', icon: ArrowRightLeft },
+                { to: '/recepcion-traspasos', label: 'Recepción Traspasos', icon: ArrowRightLeft },
                 { to: '/mapa-logistico', label: 'Bodegas y ubicaciones', icon: MapPin },
             ],
         },

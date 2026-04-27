@@ -36,6 +36,32 @@ export const fetchPharmacyProducts = async () => {
     .order('name');
 };
 
+// ── Kardex: calcula el saldo actual tras un movimiento y lo guarda ────────────
+// Llama a esta función DESPUÉS de actualizar inventory_batches en cada movimiento.
+export const calculateBalanceAfter = async (schema, productId, locationId, movementId) => {
+  try {
+    // Sumar todas las cantidades del producto en esa ubicación
+    const { data: batches } = await schema
+      .from('inventory_batches')
+      .select('current_quantity')
+      .eq('product_id', productId)
+      .eq('location_id', locationId);
+
+    const balance = (batches || []).reduce((sum, b) => sum + (b.current_quantity || 0), 0);
+
+    await schema
+      .from('inventory_movements')
+      .update({ balance_after: balance })
+      .eq('id', movementId);
+
+    return balance;
+  } catch (err) {
+    // No lanzar error: el movimiento ya fue registrado, solo falla el saldo
+    console.warn('calculateBalanceAfter failed silently:', err.message);
+    return null;
+  }
+};
+
 // Obtener stock consolidado por producto y bodega
 export const fetchInventoryStock = async (warehouseId = null) => {
   const companyId = await getMyCompanyId();
@@ -323,6 +349,7 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
         to_location_id: locationId,
         movement_type: 'IN_PURCHASE',
         quantity: insertedBatch.initial_quantity,
+        balance_after: insertedBatch.current_quantity,   // ← saldo real post-ingreso
         unit_cost: realUnitCost,
         receipt_id: receipt.id,
         notes: `Lote ${insertedBatch.batch_number} - OC ${poId}`
@@ -333,7 +360,7 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
       .from('inventory_movements')
       .insert(movementsToInsert);
 
-    if (movErr) throw movErr;
+    if (movErr) throw new Error(`Error registrando movimientos de compra: ${movErr.message}`);
   }
 
   // 3. Update purchase_order_items & products
@@ -483,19 +510,20 @@ export const createTransferRequest = async (transferData, cartItems) => {
     for (const item of cartItems) {
       const { batch, transferQuantity, dest_location_id } = item;
       const finalDest = dest_location_id || transferData.dest_location_id;
+      const srcLocationId = transferData.source_location_id || batch.location_id;
 
       // 1. Restar del origen
+      const newSrcQty = Math.max(0, (batch.current_quantity || 0) - transferQuantity);
       const { error: subErr } = await schema
         .from('inventory_batches')
-        .update({ current_quantity: batch.current_quantity - transferQuantity })
+        .update({ current_quantity: newSrcQty })
         .eq('id', batch.id);
       if (subErr) throw new Error(`Error restando stock origen (${batch.batch_number}): ${subErr.message}`);
 
-      // 2. Sumar al destino (Upsert basado en lote/producto/ubicacion)
-      // Buscamos si ya existe el lote en la ubicación destino
+      // 2. Sumar al destino — upsert por lote/producto/ubicación
       const { data: existingBatch, error: findErr } = await schema
         .from('inventory_batches')
-        .select('*')
+        .select('id, current_quantity')
         .eq('company_id', companyId)
         .eq('product_id', batch.product_id)
         .eq('location_id', finalDest)
@@ -504,14 +532,19 @@ export const createTransferRequest = async (transferData, cartItems) => {
 
       if (findErr) throw findErr;
 
+      let destBatchId;
+      let newDestQty;
       if (existingBatch) {
+        newDestQty = Number(existingBatch.current_quantity) + transferQuantity;
         const { error: addErr } = await schema
           .from('inventory_batches')
-          .update({ current_quantity: Number(existingBatch.current_quantity) + transferQuantity })
+          .update({ current_quantity: newDestQty })
           .eq('id', existingBatch.id);
-        if (addErr) throw addErr;
+        if (addErr) throw new Error(`Error sumando stock destino: ${addErr.message}`);
+        destBatchId = existingBatch.id;
       } else {
-        const { error: insErr } = await schema
+        newDestQty = transferQuantity;
+        const { data: newBatch, error: insErr } = await schema
           .from('inventory_batches')
           .insert([{
             company_id: companyId,
@@ -522,26 +555,53 @@ export const createTransferRequest = async (transferData, cartItems) => {
             initial_quantity: transferQuantity,
             current_quantity: transferQuantity,
             po_id: batch.po_id
-          }]);
-        if (insErr) throw insErr;
+          }])
+          .select('id')
+          .single();
+        if (insErr) throw new Error(`Error creando lote destino: ${insErr.message}`);
+        destBatchId = newBatch?.id;
       }
 
-      // 3. Registrar Movimiento
-      await schema
+      // 3a. SALIDA: movimiento negativo desde el lote de ORIGEN
+      //     Usa exactamente las mismas columnas que IN_PURCHASE (que SÍ funciona)
+      const { error: movOutErr } = await schema
         .from('inventory_movements')
         .insert([{
           company_id: companyId,
           product_id: batch.product_id,
           batch_id: batch.id,
           batch_number: batch.batch_number,
-          from_location_id: transferData.source_location_id,
+          from_location_id: srcLocationId,
+          to_location_id: null,
+          movement_type: 'INTERNAL_TRANSFER',
+          quantity: -Math.abs(transferQuantity),
+          balance_after: newSrcQty,
+          notes: `Acomodo interno (salida): ${transferData.notes || ''}`
+        }]);
+
+      if (movOutErr) {
+        throw new Error(`[Kardex] FALLO al registrar INTERNAL_TRANSFER salida: ${movOutErr.message}`);
+      }
+
+      // 3b. ENTRADA: movimiento positivo al lote de DESTINO
+      const { error: movInErr } = await schema
+        .from('inventory_movements')
+        .insert([{
+          company_id: companyId,
+          product_id: batch.product_id,
+          batch_id: destBatchId,
+          batch_number: batch.batch_number,
+          from_location_id: null,
           to_location_id: finalDest,
           movement_type: 'INTERNAL_TRANSFER',
-          quantity: transferQuantity,
-          created_by: user.id,
-          notes: `Acomodo interno: ${transferData.notes || ''}`
-          // El reference_folio se genera por trigger o se omite en acomodos simples si no hay secuencia expuesta
+          quantity: Math.abs(transferQuantity),
+          balance_after: newDestQty,
+          notes: `Acomodo interno (entrada): ${transferData.notes || ''}`
         }]);
+
+      if (movInErr) {
+        throw new Error(`[Kardex] FALLO al registrar INTERNAL_TRANSFER entrada: ${movInErr.message}`);
+      }
     }
     return { type: 'ACOMODO', message: 'Acomodo interno finalizado correctamente.' };
   } else {
@@ -580,8 +640,202 @@ export const createTransferRequest = async (transferData, cartItems) => {
 
     if (itemsErr) throw new Error("Error creando detalle de reserva: " + itemsErr.message);
 
+    // 3. Descontar stock origen y registrar salida en Kardex
+    for (const item of cartItems) {
+      const { batch, transferQuantity } = item;
+
+      // 3a. Restar del lote de origen
+      const newQty = (batch.current_quantity || 0) - transferQuantity;
+      const { error: subErr } = await schema
+        .from('inventory_batches')
+        .update({ current_quantity: newQty })
+        .eq('id', batch.id);
+
+      if (subErr) throw new Error(`Error descontando stock origen (${batch.batch_number}): ${subErr.message}`);
+
+      // 3b. Calcular saldo restante ANTES de insertar para incluirlo en el payload
+      const balanceAfter = Math.max(0, newQty);
+
+      // 3c. Registrar OUTBOUND_TRANSFER — quantity NEGATIVO (requerido por v_kardex_professional)
+      const { error: movErr } = await schema
+        .from('inventory_movements')
+        .insert([{
+          company_id: companyId,
+          product_id: batch.product_id,
+          batch_id: batch.id,
+          batch_number: batch.batch_number,
+          from_location_id: transferData.source_location_id || batch.location_id,
+          to_location_id: null,
+          movement_type: 'OUTBOUND_TRANSFER',
+          quantity: -Math.abs(transferQuantity),
+          reference_folio: header.folio,
+          balance_after: balanceAfter,
+          notes: `Reserva inter-sucursal ${header.folio} → Sucursal destino`
+        }]);
+
+      if (movErr) {
+        throw new Error(`[Kardex] FALLO OUTBOUND_TRANSFER: ${movErr.message}`);
+      }
+    }
+
     return { type: 'RESERVA', folio: header.folio, message: `Reserva ${header.folio} generada. Pendiente de recepción en destino.` };
   }
+};
+
+// --- RECEPCIÓN DE TRASPASOS (LOGÍSTICA) ---
+
+export const fetchPendingTransfers = async (warehouseId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('transfer_requests')
+    .select('*, source_warehouse:warehouses!source_warehouse_id(name)')
+    .eq('company_id', companyId)
+    .eq('destination_warehouse_id', warehouseId)
+    .eq('status', 'PENDING')
+    .order('created_at', { ascending: false });
+};
+
+export const fetchTransferItems = async (transferId) => {
+  return await getPharmacySchema()
+    .from('transfer_request_items')
+    .select('*, product:products!product_id(name, dci), batch:inventory_batches!batch_id(batch_number, expiry_date)')
+    .eq('transfer_request_id', transferId);
+};
+
+export const receiveTransfer = async (transferId, warehouseId, receptionMeta = {}, receivedQuantities = {}) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+
+  const { dispatchGuide = null, receptionNotes = null } = receptionMeta;
+
+  // 1. Obtener ubicación de CUARENTENA del local destino
+  const { data: quarantineLoc, error: qError } = await schema
+    .from('locations')
+    .select('id')
+    .eq('warehouse_id', warehouseId)
+    .eq('location_type', 'QUARANTINE')
+    .limit(1)
+    .single();
+
+  if (qError || !quarantineLoc) throw new Error("No se encontró ubicación de CUARENTENA en la sucursal de destino.");
+
+  // 2. Obtener cabecera (folio) + items del traspaso
+  const { data: header } = await schema
+    .from('transfer_requests')
+    .select('folio')
+    .eq('id', transferId)
+    .single();
+  const transferFolio = header?.folio || null;
+
+  const { data: items, error: iError } = await schema
+    .from('transfer_request_items')
+    .select('*')
+    .eq('transfer_request_id', transferId);
+
+  if (iError || !items.length) throw new Error("No se encontraron items para recibir.");
+
+  // 3. Procesar cada item usando la cantidad RECIBIDA (no la enviada)
+  for (const item of items) {
+    const receivedQty = Number(receivedQuantities[item.id] ?? item.quantity);
+
+    // 3a. Obtener datos del lote original para mantener consistencia
+    const { data: originalBatch } = await schema
+      .from('inventory_batches')
+      .select('*')
+      .eq('id', item.batch_id)
+      .single();
+
+    if (!originalBatch) continue; // Lote de origen no encontrado, saltar
+
+    // Solo actualizar stock si la cantidad recibida es mayor a 0
+    if (receivedQty > 0) {
+      // 3b. Insertar/Actualizar stock en destino (Cuarentena) con cantidad RECIBIDA
+      const { data: existingBatch } = await schema
+        .from('inventory_batches')
+        .select('id, current_quantity')
+        .eq('product_id', item.product_id)
+        .eq('batch_number', originalBatch.batch_number)
+        .eq('location_id', quarantineLoc.id)
+        .maybeSingle();
+
+      let destBatchId;
+      if (existingBatch) {
+        const newQtyDest = existingBatch.current_quantity + receivedQty;
+        await schema
+          .from('inventory_batches')
+          .update({ current_quantity: newQtyDest })
+          .eq('id', existingBatch.id);
+        destBatchId = existingBatch.id;
+      } else {
+        const { data: newBatch } = await schema
+          .from('inventory_batches')
+          .insert([{
+            company_id: companyId,
+            product_id: item.product_id,
+            location_id: quarantineLoc.id,
+            batch_number: originalBatch.batch_number,
+            expiry_date: originalBatch.expiry_date,
+            initial_quantity: receivedQty,
+            current_quantity: receivedQty
+          }])
+          .select('id')
+          .single();
+        destBatchId = newBatch?.id;
+      }
+
+      // 3c. Registrar INBOUND_TRANSFER — quantity POSITIVO (es una entrada en el destino)
+      //     Usamos el batch del destino y calculamos balance_after inline
+      const destQtyAfter = existingBatch
+        ? (existingBatch.current_quantity + receivedQty)
+        : receivedQty;
+
+      const { error: movErr } = await schema
+        .from('inventory_movements')
+        .insert([{
+          company_id: companyId,
+          product_id: item.product_id,
+          batch_id: destBatchId || item.batch_id,
+          batch_number: originalBatch.batch_number,
+          from_location_id: null,
+          to_location_id: quarantineLoc.id,
+          movement_type: 'INBOUND_TRANSFER',
+          quantity: Math.abs(receivedQty),
+          reference_folio: transferFolio || null,
+          balance_after: destQtyAfter,
+          notes: `Recepción de traspaso inter-sucursal${dispatchGuide ? ` | Guía: ${dispatchGuide}` : ''}`
+        }]);
+
+      if (movErr) {
+        throw new Error(`[Kardex] FALLO INBOUND_TRANSFER: ${movErr.message}`);
+      }
+    }
+
+    // 3d. Actualizar estado del item con la cantidad realmente recibida
+    const itemUpdate = { status: 'COMPLETED', received_quantity: receivedQty };
+    await schema
+      .from('transfer_request_items')
+      .update(itemUpdate)
+      .eq('id', item.id);
+  }
+
+  // 4. Finalizar cabecera con datos del documento
+  const headerUpdate = {
+    status: 'COMPLETED',
+    ...(dispatchGuide && { dispatch_guide: dispatchGuide }),
+    ...(receptionNotes && { notes: receptionNotes })
+  };
+
+  const { error: finalError } = await schema
+    .from('transfer_requests')
+    .update(headerUpdate)
+    .eq('id', transferId);
+
+  if (finalError) throw finalError;
+
+  return { success: true };
 };
 export const createWarehouse = async (warehouseData) => {
   const schema = getPharmacySchema();

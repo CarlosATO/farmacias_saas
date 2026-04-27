@@ -43,6 +43,7 @@ export default function OrdenesCompra() {
     const [orderReceipts, setOrderReceipts] = useState([]);
     const [receiveItems, setReceiveItems] = useState([]);
     const [warehouses, setWarehouses] = useState([]);
+    const [stockMap, setStockMap] = useState({});  // { product_id: number } — stock real en lotes
     
     const [receiptData, setReceiptData] = useState({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '', warehouse_id: '' });
     
@@ -64,12 +65,25 @@ export default function OrdenesCompra() {
                 setPurchaseOrders(poRes.data || []);
                 setWarehouses(whRes.data || []);
             } else {
-                const [supRes, prodRes] = await Promise.all([
+                const [supRes, prodRes, batchRes] = await Promise.all([
                     fetchSuppliers(),
-                    fetchPharmacyProducts()
+                    fetchPharmacyProducts(),
+                    // Stock real desde inventory_batches (no la columna estática del maestro)
+                    supabase
+                        .schema('pharmacy')
+                        .from('inventory_batches')
+                        .select('product_id, current_quantity, location:location_id!inner(warehouse_id)')
+                        .eq('location.warehouse_id', activeWarehouse.id)
                 ]);
                 setSuppliers(supRes.data || []);
                 setProducts(prodRes.data || []);
+
+                // Construir mapa de stock real por producto
+                const newStockMap = {};
+                (batchRes.data || []).forEach(b => {
+                    newStockMap[b.product_id] = (newStockMap[b.product_id] || 0) + (b.current_quantity || 0);
+                });
+                setStockMap(newStockMap);
             }
         } catch (error) {
             console.error('Error cargando datos de OC:', error);
@@ -947,7 +961,7 @@ export default function OrdenesCompra() {
                                 <tr className="bg-gray-50/50 cursor-pointer">
                                     <td className="px-10 py-4" colSpan="5">
                                         <SearchableSelect 
-                                            options={products.map(p => ({ value: p.id, label: p.name, subLabel: `DCI: ${p.dci || p.active_ingredient || ''} | Stock: ${p.stock_quantity || 0}` }))}
+                                            options={products.map(p => ({ value: p.id, label: p.name, subLabel: `DCI: ${p.dci || p.active_ingredient || ''} | Stock local: ${stockMap[p.id] ?? 0} un` }))}
                                             value=""
                                             onChange={handleAddItem}
                                             placeholder="Haga clic para buscar y agregar fármacos al pedido..."
