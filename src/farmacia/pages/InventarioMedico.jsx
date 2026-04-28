@@ -208,6 +208,7 @@ export default function InventarioMedico() {
                 {!selectedLocationId && (
                   <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Otros Locales</th>
                 )}
+                <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">Trazabilidad</th>
                 <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">Kardex</th>
               </tr>
             </thead>
@@ -266,6 +267,17 @@ export default function InventarioMedico() {
                           </div>
                         </td>
                       )}
+                      <td className="px-6 py-4 text-center">
+                        <button
+                          onClick={() => navigate(`/mapa-lotes/${product.id}`)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase
+                            bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-600 hover:text-white
+                            transition-all active:scale-95"
+                        >
+                          <Layers size={12} />
+                          Ver Lotes
+                        </button>
+                      </td>
                       <td className="px-6 py-4 text-center">
                         <button
                           onClick={() => navigate(`/kardex/${product.id}`)}

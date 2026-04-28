@@ -19,6 +19,7 @@ const KardexProducto = lazy(() => import('./farmacia/pages/KardexProducto'));
 const AdminSucursales = lazy(() => import('./farmacia/pages/AdminSucursales'));
 import { SucursalProvider } from './farmacia/context/SucursalContext';
 import GestionPrecios from './farmacia/pages/GestionPrecios';
+const MapaLotes = lazy(() => import('./farmacia/pages/MapaLotes'));
 
 const PageLoader = () => (
   <div className="h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -96,6 +97,7 @@ export default function App() {
             <Route path="traspasos" element={<Suspense fallback={<PageLoader />}><TraspasosInternos /></Suspense>} />
             <Route path="recepcion-traspasos" element={<Suspense fallback={<PageLoader />}><RecepcionTraspasos /></Suspense>} />
             <Route path="kardex/:productId" element={<Suspense fallback={<PageLoader />}><KardexProducto /></Suspense>} />
+            <Route path="mapa-lotes/:productId" element={<Suspense fallback={<PageLoader />}><MapaLotes /></Suspense>} />
             <Route path="sucursales" element={<Suspense fallback={<PageLoader />}><AdminSucursales /></Suspense>} />
             <Route path="pricing" element={<GestionPrecios />} />
           </Route>

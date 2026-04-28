@@ -7,6 +7,7 @@ import {
   fetchPharmacyProducts, fetchPrescriptions, createSaleWithItems, fetchInventoryStock, fetchPricesByWarehouse
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
+import CheckoutModal from '../components/CheckoutModal';
 
 export default function PuntoDeVenta() {
   const { activeWarehouse } = useSucursal();
@@ -21,6 +22,7 @@ export default function PuntoDeVenta() {
   const [modalInput, setModalInput] = useState('');
   const [selectedPrescription, setSelectedPrescription] = useState('');
   const [isProcessingSale, setIsProcessingSale] = useState(false);
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
 
@@ -142,28 +144,33 @@ export default function PuntoDeVenta() {
   const calculateTotal = () => cart.reduce((acc, item) => acc + (safePrice(item) * Number(item.quantity || 0)), 0);
   const totalItems = cart.reduce((acc, item) => acc + (Number(item.quantity) || 0), 0);
 
-  const handleCheckout = async () => {
+  const handleCheckout = () => {
     if (cart.length === 0 || isProcessingSale) return;
+    setShowCheckoutModal(true);
+  };
+
+  const confirmSale = async (modalSaleHeader) => {
     setIsProcessingSale(true);
     try {
       const saleHeader = {
-        total_amount: calculateTotal(), status: 'COMPLETED', payment_method: 'CASH',
+        ...modalSaleHeader,
+        // Enlazar paciente si viene de una receta
+        patient_id: cart.find(i => i.patient_id)?.patient_id || null,
         prescription_id: cart.find(i => i.prescription_id)?.prescription_id || null
       };
-      const saleItems = cart.map(item => ({
-        product_id: item.id, quantity: item.quantity,
-        unit_price: safePrice(item),
-        total_price: safePrice(item) * item.quantity,
-        validation_info: item.validation_rut || null, prescription_id: item.prescription_id || null
-      }));
-      const sale = await createSaleWithItems(saleHeader, saleItems);
-      alert(`Venta #${sale.id.slice(0,8)} procesada. Dispense los fármacos.`);
+
+      const sale = await createSaleWithItems(saleHeader, cart, activeWarehouse.id);
+      alert(`Venta #${sale.id.slice(0,8)} procesada. Stock descontado por FEFO.`);
+      
       setCart([]);
+      setShowCheckoutModal(false);
       loadInitialData();
     } catch (err) {
-      console.error("Error en checkout:", err);
-      alert("Error al procesar la venta. Verifique conexión o inventario.");
-    } finally { setIsProcessingSale(false); }
+      console.error("ERROR CRÍTICO BD:", err);
+      alert("Error BD: " + (err.message || JSON.stringify(err)));
+    } finally { 
+      setIsProcessingSale(false); 
+    }
   };
 
   const getBadgeColor = (condition) => {
@@ -456,6 +463,14 @@ export default function PuntoDeVenta() {
             </div>
           </div>
         </div>
+      )}
+      {showCheckoutModal && (
+        <CheckoutModal 
+          total={calculateTotal()}
+          onClose={() => setShowCheckoutModal(false)}
+          onConfirm={confirmSale}
+          isProcessing={isProcessingSale}
+        />
       )}
     </div>
   );

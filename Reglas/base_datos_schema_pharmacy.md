@@ -134,6 +134,17 @@ CREATE TABLE pharmacy.prescriptions (
   CONSTRAINT prescriptions_patient_id_fkey FOREIGN KEY (patient_id) REFERENCES pharmacy.patients(id),
   CONSTRAINT prescriptions_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
 );
+CREATE TABLE pharmacy.product_prices (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  product_id uuid NOT NULL,
+  warehouse_id uuid NOT NULL,
+  price_sale numeric NOT NULL DEFAULT 0,
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT product_prices_pkey PRIMARY KEY (id),
+  CONSTRAINT product_prices_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id),
+  CONSTRAINT product_prices_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES pharmacy.warehouses(id)
+);
 CREATE TABLE pharmacy.products (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL,
@@ -223,9 +234,11 @@ CREATE TABLE pharmacy.sale_items (
   quantity numeric NOT NULL,
   unit_price numeric NOT NULL,
   subtotal numeric NOT NULL,
+  company_id uuid,
   CONSTRAINT sale_items_pkey PRIMARY KEY (id),
   CONSTRAINT sale_items_sale_id_fkey FOREIGN KEY (sale_id) REFERENCES pharmacy.sales(id),
-  CONSTRAINT sale_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id)
+  CONSTRAINT sale_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id),
+  CONSTRAINT sale_items_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
 CREATE TABLE pharmacy.sales (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

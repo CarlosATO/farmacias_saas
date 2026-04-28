@@ -188,38 +188,111 @@ export const fetchPrescriptionItems = async (prescriptionId) => {
     .eq('prescription_id', prescriptionId);
 };
 
-// --- OPERACIONES DE VENTA (POS) ---
-export const createSaleWithItems = async (saleHeader, items) => {
+// --- OPERACIONES DE VENTA (POS) CON LÓGICA FEFO ---
+export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) => {
   const schema = getPharmacySchema();
   const companyId = await getMyCompanyId();
   if (!companyId) throw new Error("Acceso denegado: No se encontró vinculación con una empresa.");
 
-  const finalHeader = {
-    ...saleHeader,
+  const userId = await getCurrentUserId();
+  if (!userId) throw new Error("Sesión expirada o usuario no autenticado.");
+
+  // 1. Creación de la Cabecera (Payload Estricto de 6 propiedades)
+  const salePayload = {
     company_id: companyId,
-    sale_date: new Date().toISOString()
+    user_id: userId,
+    total_amount: Number(saleHeader.total_amount),
+    payment_method: saleHeader.payment_method || 'CASH',
+    document_number: saleHeader.document_number || `TICKET-${Date.now()}`,
+    patient_id: saleHeader.patient_id || null
   };
 
   const { data: header, error: headerError } = await schema
     .from('sales')
-    .insert([finalHeader])
+    .insert([salePayload])
     .select()
     .single();
 
-  if (headerError) throw headerError;
+  if (headerError) {
+    console.error("ERROR CABECERA VENTA:", headerError);
+    throw headerError;
+  }
+  const saleHeaderId = header.id;
 
-  const itemsWithSale = items.map(item => ({
-    ...item,
-    sale_id: header.id,
-    company_id: companyId
-  }));
+  // 2. Bucle Principal (Por cada producto en cartItems)
+  for (const item of cartItems) {
+    const productId = item.id || item.product_id;
+    const priceSale = item.price_sale || item.unit_price || 0;
 
-  const { error: itemsError } = await schema
-    .from('sale_items')
-    .insert(itemsWithSale);
+    // Búsqueda FEFO: Consulta inventory_batches, inner join con location para filtrar bodega
+    const { data: batches, error: batchesErr } = await schema
+      .from('inventory_batches')
+      .select('*, location:location_id!inner(*)')
+      .eq('product_id', productId)
+      .eq('location.warehouse_id', warehouseId)
+      .gt('current_quantity', 0)
+      .order('expiry_date', { ascending: true });
 
-  if (itemsError) throw itemsError;
+    if (batchesErr) throw batchesErr;
 
+    // 3. Bucle Destripador de Lotes
+    let remainingToFulfill = item.quantity;
+
+    for (const batch of batches) {
+      if (remainingToFulfill <= 0) break;
+
+      const qtyToDeduct = Math.min(remainingToFulfill, batch.current_quantity);
+      const newBatchQty = batch.current_quantity - qtyToDeduct;
+      
+      // A. Actualizar Lote
+      const { error: updErr } = await schema
+        .from('inventory_batches')
+        .update({ current_quantity: newBatchQty })
+        .eq('id', batch.id);
+      
+      if (updErr) throw updErr;
+      
+      // B. Insertar item de venta asociado a este lote
+      const { error: itemErr } = await schema
+        .from('sale_items')
+        .insert({
+           company_id: companyId,
+           sale_id: saleHeaderId,
+           product_id: productId,
+           batch_id: batch.id,
+           quantity: qtyToDeduct,
+           unit_price: priceSale,
+           subtotal: qtyToDeduct * priceSale
+        });
+      
+      if (itemErr) throw itemErr;
+
+      // C. Insertar movimiento en Kardex
+      const { error: movErr } = await schema
+        .from('inventory_movements')
+        .insert({
+           company_id: companyId,
+           product_id: productId,
+           batch_id: batch.id,
+           batch_number: batch.batch_number,
+           from_location_id: batch.location_id,
+           movement_type: 'SALE',
+           quantity: -Math.abs(qtyToDeduct),
+           balance_after: newBatchQty,
+           reference_folio: saleHeader.document_number || 'VENTA_POS'
+        });
+      
+      if (movErr) throw movErr;
+
+      remainingToFulfill -= qtyToDeduct;
+    }
+
+    if (remainingToFulfill > 0) {
+      throw new Error(`Stock físico insuficiente para ${item.name || 'producto'}. Faltan ${remainingToFulfill} unidades.`);
+    }
+  }
+
+  // Si la venta está vinculada a una receta, marcarla como dispensada
   if (saleHeader.prescription_id) {
     await schema
       .from('prescriptions')

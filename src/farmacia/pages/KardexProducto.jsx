@@ -1,86 +1,116 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, BookOpen, ChevronRight, MapPin, Search,
-  ArrowUpCircle, ArrowDownCircle, RefreshCcw, Loader2,
-  Calendar, Filter, TrendingUp, Pill, Info
+  ArrowLeft, ChevronRight, MapPin, Search,
+  Loader2, Calendar, Pill, EyeOff, Eye
 } from 'lucide-react';
 import { getPharmacySchema, getMyCompanyId } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 
-// ── Determina color y dirección basándose en si hay entrada o salida ─────────
-function MovBadge({ tipoHumano, entrada, salida }) {
-  const isEntry = entrada > 0;
-  const isExit  = salida > 0;
+// Componente Switch para el toggle
+const Switch = ({ checked, onChange }) => (
+  <button
+    onClick={() => onChange(!checked)}
+    className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 ${
+      checked ? 'bg-[#4C3073]' : 'bg-gray-200'
+    }`}
+  >
+    <span
+      className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform duration-200 ease-in-out ${
+        checked ? 'translate-x-6' : 'translate-x-1'
+      }`}
+    />
+  </button>
+);
 
-  if (isEntry) {
-    return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase
-        bg-green-50 border-green-200 text-green-700">
-        <ArrowUpCircle size={11} />
-        {tipoHumano || 'Entrada'}
-      </span>
-    );
-  }
-  if (isExit) {
-    return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase
-        bg-red-50 border-red-200 text-red-700">
-        <ArrowDownCircle size={11} />
-        {tipoHumano || 'Salida'}
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase
-      bg-gray-100 border-gray-200 text-gray-600">
-      <RefreshCcw size={11} />
-      {tipoHumano || 'Ajuste'}
-    </span>
-  );
-}
+// Hook para redimensionamiento de columnas
+const useResizableColumns = (initialWidths) => {
+  const [columnWidths, setColumnWidths] = useState(initialWidths);
+  const resizingRef = useRef(null);
+
+  const handleMouseDown = (index, e) => {
+    resizingRef.current = { index, startX: e.clientX, startWidth: columnWidths[index] };
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!resizingRef.current) return;
+    const { index, startX, startWidth } = resizingRef.current;
+    const newWidth = Math.max(50, startWidth + (e.clientX - startX));
+    setColumnWidths(prev => {
+      const newWidths = [...prev];
+      newWidths[index] = newWidth;
+      return newWidths;
+    });
+  };
+
+  const handleMouseUp = () => {
+    resizingRef.current = null;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
+  };
+
+  return { columnWidths, handleMouseDown };
+};
 
 export default function KardexProducto() {
   const { productId } = useParams();
   const navigate = useNavigate();
   const { activeWarehouse } = useSucursal();
 
-  const [product, setProduct]     = useState(null);
-  const [rows, setRows]           = useState([]);
-  const [locations, setLocations] = useState([]);
-  const [loading, setLoading]     = useState(true);
+  const [product, setProduct] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [hideInternal, setHideInternal] = useState(false);
 
-  // Filtros
-  const [dateFrom, setDateFrom]               = useState('');
-  const [dateTo, setDateTo]                   = useState('');
-  const [selectedLocation, setSelectedLocation] = useState('');
+  // Anchos iniciales de columnas
+  const initialWidths = [120, 100, 300, 120, 100, 100, 120, 200];
+  const { columnWidths, handleMouseDown } = useResizableColumns(initialWidths);
 
-  // ── Bodegas del local para el filtro ─────────────────────────────────────
+  const formatLoc = (loc, warehouseName) => {
+    if (!loc) return warehouseName || 'N/A';
+    const finalWarehouse = (loc.warehouses && !Array.isArray(loc.warehouses))
+      ? loc.warehouses.name
+      : warehouseName;
+    return `${finalWarehouse} / ${loc.name}`;
+  };
+
+  const formatRoute = (m) => {
+    const type = m.movement_type;
+    let origin = '—';
+    let destination = '—';
+
+    const fromWarehouseName = m.from_loc?.warehouses?.name || activeWarehouse.name;
+    const toWarehouseName = m.to_loc?.warehouses?.name || activeWarehouse.name;
+
+    if (type === 'SALE') {
+      origin = formatLoc(m.from_loc, fromWarehouseName);
+      destination = "Venta a Público";
+    } else if (type === 'RECEIPT' || type === 'IN') {
+      origin = m.inventory_receipts?.suppliers?.legal_name 
+               ? 'Proveedor: ' + m.inventory_receipts.suppliers.legal_name 
+               : 'Ingreso Externo';
+      destination = formatLoc(m.to_loc, toWarehouseName);
+    } else if (type === 'INTERNAL_TRANSFER') {
+      origin = formatLoc(m.from_loc, fromWarehouseName);
+      destination = formatLoc(m.to_loc, toWarehouseName);
+    } else if (type === 'TRANSFER' || type.includes('TRANSFER')) {
+      origin = formatLoc(m.from_loc, fromWarehouseName);
+      destination = formatLoc(m.to_loc, toWarehouseName);
+    } else {
+      origin = formatLoc(m.from_loc, fromWarehouseName) || '—';
+      destination = formatLoc(m.to_loc, toWarehouseName) || '—';
+    }
+    return { origin, destination };
+  };
+
   useEffect(() => {
-    const load = async () => {
-      if (!activeWarehouse?.id) return;
-      const companyId = await getMyCompanyId();
-      const schema = getPharmacySchema();
-      const { data } = await schema
-        .from('locations')
-        .select('id, name, location_type')
-        .eq('company_id', companyId)
-        .eq('warehouse_id', activeWarehouse.id)
-        .order('name');
-      setLocations(data || []);
-    };
-    load();
-  }, [activeWarehouse?.id]);
-
-  // ── Carga el historial desde v_kardex_professional ───────────────────────
-  // useEffect directo con todas las deps explícitas — garantiza re-ejecución
-  // cuando activeWarehouse pasa de null → valor real (hidratación del contexto)
-  useEffect(() => {
-    // Guardia: no ejecutar hasta que ambos valores estén disponibles
     if (!productId || !activeWarehouse?.id) return;
-
-    let cancelled = false;   // evita setState en componentes desmontados
+    let cancelled = false;
     setLoading(true);
 
     (async () => {
@@ -88,113 +118,109 @@ export default function KardexProducto() {
         const companyId = await getMyCompanyId();
         const schema = getPharmacySchema();
 
-        // Producto (para el encabezado)
-        const { data: prod, error: prodErr } = await schema
+        const { data: prod } = await schema
           .from('products')
-          .select('id, name, dci, active_principle, sale_condition')
+          .select('id, name, dci, active_principle')
           .eq('id', productId)
           .single();
-        if (prodErr) console.error('[Kardex] Error cargando producto:', prodErr.message);
         if (!cancelled) setProduct(prod ?? null);
 
-        // Historial desde v_kardex_professional — columnas en español
-        // FILTRO DOBLE: product_id + warehouse_id  ← aislamiento por sucursal
+        const { data: locs } = await schema
+          .from('locations')
+          .select('id, warehouse_id')
+          .eq('company_id', companyId);
+        
+        const warehouseLocationIds = (locs || [])
+          .filter(l => l.warehouse_id === activeWarehouse.id)
+          .map(l => l.id);
+
+        if (warehouseLocationIds.length === 0) {
+          if (!cancelled) setRows([]);
+          return;
+        }
+
         let query = schema
-          .from('v_kardex_professional')
-          .select('fecha, product_id, producto, dci, warehouse_id, sucursal, bodega_ubicacion, tipo_movimiento_humano, referencia, lote, entrada, salida, saldo_acumulado')
+          .from('inventory_movements')
+          .select(`
+            *,
+            from_loc:from_location_id ( id, name, warehouse_id, warehouses (id, name) ),
+            to_loc:to_location_id ( id, name, warehouse_id, warehouses (id, name) ),
+            inventory_batches ( batch_number ),
+            inventory_receipts ( suppliers:supplier_id ( legal_name ) )
+          `)
           .eq('product_id', productId)
-          .eq('warehouse_id', activeWarehouse?.id)
-          .order('fecha', { ascending: false });
+          .eq('company_id', companyId)
+          .or(`from_location_id.in.(${warehouseLocationIds.join(',')}),to_location_id.in.(${warehouseLocationIds.join(',')})`)
+          .order('created_at', { ascending: true });
 
-        if (dateFrom)         query = query.gte('fecha', dateFrom);
-        if (dateTo)           query = query.lte('fecha', dateTo + 'T23:59:59');
-        if (selectedLocation) query = query.ilike('bodega_ubicacion', `%${selectedLocation}%`);
+        if (dateFrom) query = query.gte('created_at', dateFrom);
+        if (dateTo) query = query.lte('created_at', dateTo + 'T23:59:59');
 
-        const { data, error } = await query.limit(300);
+        const { data, error } = await query;
+
         if (!cancelled) {
           if (error) {
-            console.error('[Kardex] Error en v_kardex_professional:', error.message, error);
+            console.error('[Kardex] Error:', error);
             setRows([]);
           } else {
-            setRows(data ?? []);
+            let saldoAcumulado = 0;
+            const movementsWithBalance = (data || []).map(mov => {
+              const qty = Number(mov.quantity) || 0;
+              const isInternal = mov.from_loc?.warehouse_id === mov.to_loc?.warehouse_id;
+              
+              // Solo los movimientos que no son internos afectan el saldo
+              if (!isInternal) {
+                saldoAcumulado += qty;
+              }
+              
+              return { ...mov, calculated_balance: saldoAcumulado, is_internal: isInternal };
+            });
+            setRows(movementsWithBalance.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
           }
         }
       } catch (err) {
-        console.error('[Kardex] Error inesperado:', err);
-        if (!cancelled) setRows([]);
+        console.error(err);
       } finally {
-        if (!cancelled) setLoading(false);   // spinner siempre se detiene
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
+  }, [productId, activeWarehouse?.id, dateFrom, dateTo]);
 
-    return () => { cancelled = true; };   // cleanup en desmontaje / re-render
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productId, activeWarehouse?.id, dateFrom, dateTo, selectedLocation]);
+  const processedRows = useMemo(() => {
+    let filteredData = [...rows];
 
-  // ── Filtro de texto libre sobre columnas reales de la vista ────────────
-  const filtered = useMemo(() =>
-    rows.filter(r => {
-      if (!searchTerm) return true;
+    if (hideInternal) {
+      filteredData = filteredData.filter(r => !r.is_internal);
+    }
+
+    if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      return (
-        r.tipo_movimiento_humano?.toLowerCase().includes(term) ||
-        r.bodega_ubicacion?.toLowerCase().includes(term) ||
-        r.lote?.toLowerCase().includes(term) ||
-        r.referencia?.toLowerCase().includes(term)
-      );
-    }), [rows, searchTerm]);
+      filteredData = filteredData.filter(r => {
+        const originDest = formatRoute(r);
+        return (
+          r.movement_type?.toLowerCase().includes(term) ||
+          r.inventory_batches?.batch_number?.toLowerCase().includes(term) ||
+          r.reference_folio?.toLowerCase().includes(term) ||
+          r.notes?.toLowerCase().includes(term) ||
+          originDest.origin.toLowerCase().includes(term) ||
+          originDest.destination.toLowerCase().includes(term)
+        );
+      });
+    }
+    return filteredData;
+  }, [rows, searchTerm, hideInternal]);
 
-  // ── Totales del periodo (excluye acomodos internos para no inflar stats comerciales) ──
   const totals = useMemo(() => {
-    const commercial = filtered.filter(r => {
-      const tipo = r.tipo_movimiento_humano ?? '';
-      return !tipo.includes('Acomodo') && !tipo.includes('Interno');
-    });
-    return commercial.reduce((acc, r) => ({
-      entradas: acc.entradas + (Number(r.entrada) || 0),
-      salidas:  acc.salidas  + (Number(r.salida)  || 0),
-    }), { entradas: 0, salidas: 0 });
-  }, [filtered]);
-
-  // ── Cálculo dinámico de Saldo Acumulado (Frontend) ────────────────────────
-  const rowsWithBalance = useMemo(() => {
-    // 1. Invertimos para calcular cronológicamente (desde el más antiguo al más nuevo)
-    const chronological = [...filtered].reverse();
-    let runningWarehouseStock = 0;
-
-    const withBalance = chronological.map(row => {
-      const tipo = row.tipo_movimiento_humano ?? '';
-      // Si es un acomodo interno, no altera el stock total del local (suma cero)
-      const isInternal = tipo.includes('Acomodo') || tipo.includes('Interno');
-
-      if (!isInternal) {
-        const entrada = Number(row.entrada) || 0;
-        const salida  = Number(row.salida)  || 0;
-        runningWarehouseStock += (entrada - salida);
-      }
-
-      return { ...row, calculated_balance: runningWarehouseStock };
-    });
-
-    // 2. Volvemos a invertir para mostrar al usuario (del más nuevo al más antiguo)
-    return withBalance.reverse();
-  }, [filtered]);
-
-  // ── Early Return de Seguridad (Blindaje) ───────────────────────────────────
-  // Si no hay local, ID de producto o el producto aún no carga, mostramos estado de carga
-  // Se ubica DESPUÉS de todos los hooks (useEffect, useMemo) para cumplir con las reglas de React
-  if (!activeWarehouse || !productId || !product) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 size={40} className="text-[#4C3073] animate-spin" />
-          <p className="text-sm font-black text-gray-400 uppercase tracking-widest">
-            Cargando información del producto...
-          </p>
-        </div>
-      </div>
-    );
-  }
+    return processedRows.reduce((acc, r) => {
+      if (r.is_internal) return acc;
+      const qty = Number(r.quantity) || 0;
+      return {
+        entradas: acc.entradas + (qty > 0 ? qty : 0),
+        salidas:  acc.salidas  + (qty < 0 ? Math.abs(qty) : 0),
+      };
+    }, { entradas: 0, salidas: 0 });
+  }, [processedRows]);
 
   const fmtDate = (val) => {
     if (!val) return '—';
@@ -202,248 +228,192 @@ export default function KardexProducto() {
     catch { return String(val); }
   };
 
+  const getTipoHumano = (type, isInternal) => {
+    if (isInternal) return 'Acomodo Interno';
+    const map = { 
+      'SALE': 'Venta', 'RECEIPT': 'Compra', 'IN': 'Ingreso', 
+      'OUT': 'Salida', 'TRANSFER': 'Traspaso', 'ADJUSTMENT': 'Ajuste' 
+    };
+    return map[type] || type;
+  };
+
+  if (!activeWarehouse || !product) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <Loader2 className="text-[#4C3073] animate-spin" size={40} />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col h-full bg-gray-50 font-sans text-gray-800">
-
-      {/* ── Header ───────────────────────────────────────────────────────── */}
+    <div className="flex flex-col h-full bg-gray-50 font-sans text-gray-900">
+      
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex flex-col gap-5 shrink-0 shadow-sm">
-
-        {/* Fila 1: Navegación y local activo */}
         <div className="flex justify-between items-start">
           <div className="flex items-center gap-4">
-            <button
-              onClick={() => navigate('/inventario')}
-              className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"
-            >
+            <button onClick={() => navigate('/inventario')} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors">
               <ArrowLeft size={20} />
             </button>
             <div>
-              <div className="flex items-center text-[10px] text-gray-400 uppercase tracking-[0.2em] font-black mb-1">
-                <span>Stock e Inventario</span>
+              <div className="flex items-center text-[10px] text-gray-400 uppercase tracking-widest font-black mb-1">
+                <span>WMS Logística</span>
                 <ChevronRight size={10} className="mx-1" />
-                <span className="text-[#4C3073]">Kardex de Movimientos</span>
+                <span className="text-[#4C3073]">Libro Mayor Kardex</span>
               </div>
-              <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2 tracking-tight uppercase">
-                <BookOpen className="text-[#4C3073]" />
-                Historial de Movimientos
-              </h1>
+              <h1 className="text-2xl font-black text-gray-800 tracking-tight uppercase italic">Trazabilidad de Lotes</h1>
             </div>
           </div>
-          <div className="bg-purple-50 border border-purple-100 px-3 py-2 rounded-lg flex items-center gap-3">
-            <MapPin size={16} className="text-[#4C3073]" />
+          <div className="bg-purple-50 border border-purple-100 px-4 py-2 rounded-xl flex items-center gap-3">
+            <MapPin size={18} className="text-[#4C3073]" />
             <div className="flex flex-col">
-              <span className="text-[9px] font-black text-gray-400 uppercase leading-none">Local Activo</span>
-              <span className="text-xs font-black text-[#4C3073] uppercase">{activeWarehouse?.name || '—'}</span>
+              <span className="text-[9px] font-black text-gray-400 uppercase leading-none">Sucursal Activa</span>
+              <span className="text-xs font-black text-[#4C3073] uppercase">{activeWarehouse?.name}</span>
             </div>
           </div>
         </div>
 
-        {/* ── Ficha del Producto ─────────────────────────────────────────── */}
-        {product ? (
-          <div className="bg-purple-50 border border-purple-100 rounded-xl px-6 py-4 flex items-center gap-6">
-            <div className="p-3 bg-[#4C3073] rounded-xl text-white shrink-0">
-              <Pill size={22} />
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl px-6 py-5 flex items-center gap-8 shadow-xl">
+          <div className="p-4 bg-purple-600 rounded-2xl text-white shadow-lg shadow-purple-900/20"><Pill size={26} /></div>
+          <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div>
+              <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-1">Producto / Insumo</p>
+              <p className="text-lg font-black text-white uppercase leading-tight">{product.name}</p>
             </div>
-            <div className="flex-1 grid grid-cols-3 gap-4">
-              <div>
-                <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest">Producto</p>
-                <p className="text-sm font-black text-[#4C3073] uppercase mt-0.5 leading-tight">{product.name}</p>
-              </div>
-              <div>
-                <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest">Principio Activo (DCI)</p>
-                <p className="text-xs font-bold text-gray-600 italic mt-0.5">
-                  {product.dci || product.active_principle || 'No especificado'}
-                </p>
-              </div>
-              <div>
-                <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest">Local</p>
-                <p className="text-xs font-black text-gray-700 uppercase mt-0.5">{activeWarehouse?.name}</p>
-              </div>
+            <div>
+              <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-1">Principio Activo (DCI)</p>
+              <p className="text-sm font-bold text-gray-300 italic">{product.dci || 'No especificado'}</p>
             </div>
-            <div className="flex items-center gap-2 bg-white border border-purple-100 rounded-lg px-3 py-1.5 shrink-0">
-              <Info size={12} className="text-purple-400" />
-              <span className="text-[9px] font-black text-purple-600 uppercase">
-                {filtered.length} registro{filtered.length !== 1 ? 's' : ''} mostrados
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className="h-16 bg-gray-50 rounded-xl border border-gray-200 animate-pulse" />
-        )}
-
-        {/* ── Filtros ──────────────────────────────────────────────────────── */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 bg-gray-50">
-            <Calendar size={13} className="text-gray-400 shrink-0" />
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-              className="bg-transparent text-xs font-bold text-gray-700 outline-none" />
-            <span className="text-gray-300 text-xs font-bold">→</span>
-            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-              className="bg-transparent text-xs font-bold text-gray-700 outline-none" />
-          </div>
-
-          <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 bg-gray-50">
-            <Filter size={13} className="text-gray-400 shrink-0" />
-            <input
-              type="text"
-              placeholder="Filtrar por bodega..."
-              value={selectedLocation}
-              onChange={e => setSelectedLocation(e.target.value)}
-              className="bg-transparent text-xs font-bold text-gray-700 outline-none min-w-[160px] placeholder-gray-400"
-            />
-          </div>
-
-          <div className="relative">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input type="text" placeholder="Buscar en notas, lote, ubicación..."
-              value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-              className="border border-gray-200 rounded-lg pl-9 pr-4 py-2 text-xs font-bold w-60 bg-white
-                focus:border-[#4C3073] focus:ring-4 focus:ring-purple-50 outline-none transition-all" />
           </div>
         </div>
 
-        {/* ── Tarjetas de totales ──────────────────────────────────────────── */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-green-50 border border-green-100 rounded-xl px-5 py-3 flex items-center justify-between">
-            <div>
-              <p className="text-[9px] font-black text-green-600 uppercase tracking-widest">Total Entradas</p>
-              <p className="text-2xl font-black text-green-700 mt-0.5">
-                {totals.entradas} <span className="text-xs font-bold text-green-400">UN</span>
-              </p>
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full md:w-auto">
+            <div className="flex items-center gap-3 border border-gray-200 rounded-xl px-4 py-2 bg-gray-50 shadow-inner">
+              <Calendar size={14} className="text-gray-400" />
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="bg-transparent text-xs font-black text-gray-700 outline-none" />
+              <span className="text-gray-300 font-light">→</span>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="bg-transparent text-xs font-black text-gray-700 outline-none" />
             </div>
-            <ArrowUpCircle size={32} className="text-green-200" />
+            <div className="relative flex-1 max-w-sm">
+              <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input type="text" placeholder="Buscar por lote, folio, origen o notas..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-xs font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all" />
+            </div>
           </div>
-          <div className="bg-red-50 border border-red-100 rounded-xl px-5 py-3 flex items-center justify-between">
-            <div>
-              <p className="text-[9px] font-black text-red-500 uppercase tracking-widest">Total Salidas</p>
-              <p className="text-2xl font-black text-red-600 mt-0.5">
-                {totals.salidas} <span className="text-xs font-bold text-red-400">UN</span>
-              </p>
-            </div>
-            <ArrowDownCircle size={32} className="text-red-200" />
+          <div className="flex items-center gap-2">
+            <label htmlFor="hide-internal-switch" className="text-[10px] font-black text-gray-500 uppercase">Ocultar Internos</label>
+            <Switch checked={hideInternal} onChange={setHideInternal} />
           </div>
-          <div className="bg-purple-50 border border-purple-100 rounded-xl px-5 py-3 flex items-center justify-between">
-            <div>
-              <p className="text-[9px] font-black text-purple-500 uppercase tracking-widest">Balance del Periodo</p>
-              <p className="text-2xl font-black text-[#4C3073] mt-0.5">
-                {totals.entradas - totals.salidas} <span className="text-xs font-bold text-purple-400">UN</span>
-              </p>
-            </div>
-            <TrendingUp size={32} className="text-purple-200" />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Ingresos Totales</p>
+            <p className="text-2xl font-black text-green-700 font-mono text-right">+{totals.entradas}</p>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Egresos Totales</p>
+            <p className="text-2xl font-black text-red-700 font-mono text-right">-{totals.salidas}</p>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Saldo Actual</p>
+            <p className={`text-2xl font-black font-mono text-right ${
+              (totals.entradas - totals.salidas) >= 0 ? 'text-blue-700' : 'text-red-600'
+            }`}>
+              {totals.entradas - totals.salidas}
+            </p>
           </div>
         </div>
       </div>
 
-      {/* ── Tabla Kardex ─────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-x-auto p-6">
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Fecha</th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Tipo de Movimiento</th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Origen → Destino</th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Lote</th>
-                <th className="px-5 py-4 text-[10px] font-black text-green-600 uppercase tracking-widest text-right">Entrada (+)</th>
-                <th className="px-5 py-4 text-[10px] font-black text-red-500 uppercase tracking-widest text-right">Salida (−)</th>
-                <th className="px-5 py-4 text-[10px] font-black text-[#4C3073] uppercase tracking-widest text-right bg-purple-50 border-l border-purple-100">✦ Saldo Acumulado</th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Notas</th>
+              <tr className="bg-gray-50/70 border-b border-gray-200">
+                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative" style={{ width: columnWidths[0] }}>
+                  Fecha
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(0, e)}></div>
+                </th>
+                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative" style={{ width: columnWidths[1] }}>
+                  Tipo
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(1, e)}></div>
+                </th>
+                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative hidden md:table-cell" style={{ width: columnWidths[2] }}>
+                  Origen ➔ Destino
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(2, e)}></div>
+                </th>
+                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative" style={{ width: columnWidths[3] }}>
+                  Lote
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(3, e)}></div>
+                </th>
+                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap text-right relative" style={{ width: columnWidths[4] }}>
+                  Entrada
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(4, e)}></div>
+                </th>
+                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap text-right relative" style={{ width: columnWidths[5] }}>
+                  Salida
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(5, e)}></div>
+                </th>
+                <th className="px-5 py-4 text-[10px] font-black text-gray-800 uppercase tracking-widest whitespace-nowrap text-right bg-gray-100 relative" style={{ width: columnWidths[6] }}>
+                  Saldo
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(6, e)}></div>
+                </th>
+                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative hidden lg:table-cell" style={{ width: columnWidths[7] }}>
+                  Folio / Ref
+                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(7, e)}></div>
+                </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className="divide-y divide-gray-100">
               {loading ? (
-                <tr>
-                  <td colSpan="8" className="px-6 py-24 text-center">
-                    <div className="flex items-center justify-center gap-3 text-gray-300">
-                      <Loader2 size={28} className="animate-spin" />
-                      <span className="text-sm font-black uppercase tracking-widest">Cargando historial...</span>
-                    </div>
-                  </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td colSpan="8" className="px-6 py-24 text-center">
-                    <div className="flex flex-col items-center text-gray-300">
-                      <BookOpen size={50} className="mb-4 opacity-10" />
-                      <p className="text-sm font-black uppercase tracking-widest">Sin movimientos en este periodo</p>
-                      <p className="text-[10px] font-bold uppercase mt-1 text-gray-400">
-                        Prueba ampliar el rango de fechas o quitar filtros
-                      </p>
-                    </div>
-                  </td>
-                </tr>
+                <tr><td colSpan="8" className="px-6 py-24 text-center"><Loader2 className="animate-spin inline mr-3 text-purple-600" size={24} /> <span className="text-sm font-black text-gray-400 uppercase tracking-widest">Consultando Ledger...</span></td></tr>
+              ) : processedRows.length === 0 ? (
+                <tr><td colSpan="8" className="px-6 py-24 text-center text-gray-300 uppercase text-[11px] font-black tracking-widest italic">No se registran movimientos en este nodo</td></tr>
               ) : (
-                rowsWithBalance.map((row, idx) => {
-                  const entrada = Number(row.entrada) || 0;
-                  const salida  = Number(row.salida)  || 0;
-                  const saldo   = row.calculated_balance;
+                processedRows.map((mov, idx) => {
+                  const { origin, destination } = formatRoute(mov);
+                  const qty = Number(mov.quantity) || 0;
+                  const textColor = mov.is_internal ? 'text-gray-400' : (qty > 0 ? 'text-green-700' : 'text-red-700');
+
                   return (
-                    <tr key={idx} className="hover:bg-gray-50/40 transition-colors">
-
-                      {/* fecha */}
-                      <td className="px-5 py-3.5 text-[11px] font-bold text-gray-500 whitespace-nowrap">
-                        {fmtDate(row.fecha)}
-                      </td>
-
-                      {/* tipo_movimiento_humano */}
-                      <td className="px-5 py-3.5">
-                        <MovBadge
-                          tipoHumano={row.tipo_movimiento_humano}
-                          entrada={entrada}
-                          salida={salida}
-                        />
-                      </td>
-
-                      {/* bodega_ubicacion */}
-                      <td className="px-5 py-3.5">
-                        <span className="text-[11px] font-bold text-gray-600">{row.bodega_ubicacion || '—'}</span>
-                      </td>
-
-                      {/* lote */}
-                      <td className="px-5 py-3.5">
-                        <span className="text-[10px] font-black text-[#4C3073] uppercase">
-                          {row.lote || '—'}
+                    <tr key={idx} className="hover:bg-gray-50/50 transition-colors group">
+                      <td className="px-5 py-3 text-[11px] font-bold text-gray-500 whitespace-nowrap" style={{ width: columnWidths[0] }}>{fmtDate(mov.created_at)}</td>
+                      <td className="px-5 py-3 whitespace-nowrap" style={{ width: columnWidths[1] }}>
+                        <span className="text-[10px] font-black text-gray-600">
+                          {getTipoHumano(mov.movement_type, mov.is_internal)}
                         </span>
                       </td>
-
-                      {/* entrada */}
-                      <td className="px-5 py-3.5 text-right">
-                        {entrada > 0 ? (
-                          <span className="text-sm font-black text-green-700">
-                            +{entrada} <span className="text-[9px] font-bold text-green-400">UN</span>
-                          </span>
-                        ) : (
-                          <span className="text-gray-200 text-sm">—</span>
-                        )}
+                      <td className="px-5 py-3 text-sm text-gray-800 whitespace-nowrap hidden md:table-cell" style={{ width: columnWidths[2] }}>
+                         <span title={origin}>{origin}</span>
+                         <span className="text-gray-400 font-light mx-2">➔</span>
+                         <span className="font-semibold" title={destination}>{destination}</span>
                       </td>
-
-                      {/* salida */}
-                      <td className="px-5 py-3.5 text-right">
-                        {salida > 0 ? (
-                          <span className="text-sm font-black text-red-600">
-                            −{salida} <span className="text-[9px] font-bold text-red-400">UN</span>
-                          </span>
-                        ) : (
-                          <span className="text-gray-200 text-sm">—</span>
-                        )}
+                      <td className="px-5 py-3 whitespace-nowrap" style={{ width: columnWidths[3] }}>
+                        <span className="text-[11px] font-mono text-gray-700">
+                          {mov.inventory_batches?.batch_number || 'S/L'}
+                        </span>
                       </td>
-
-                      {/* saldo_acumulado */}
-                      <td className="px-5 py-3.5 text-right bg-purple-50/60 border-l border-purple-100">
-                        {saldo != null ? (
-                          <span className="inline-flex items-center justify-end gap-1.5">
-                            <span className="text-base font-black text-[#4C3073]">{saldo}</span>
-                            <span className="text-[9px] font-black text-purple-400 bg-purple-100 px-1.5 py-0.5 rounded uppercase">UN</span>
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-bold text-gray-300 italic">—</span>
-                        )}
+                      
+                      <td className={`px-5 py-3 text-right text-sm font-mono font-medium whitespace-nowrap ${textColor}`} style={{ width: columnWidths[4] }}>
+                        {qty > 0 ? `+${qty}` : ''}
                       </td>
-
-                      {/* referencia */}
-                      <td className="px-5 py-3.5 text-[11px] font-medium text-gray-400 max-w-[160px] truncate"
-                          title={row.referencia}>
-                        {row.referencia || '—'}
+                      
+                      <td className={`px-5 py-3 text-right text-sm font-mono font-medium whitespace-nowrap ${textColor}`} style={{ width: columnWidths[5] }}>
+                        {qty < 0 ? `${qty}` : ''}
+                      </td>
+                      
+                      <td className={`px-5 py-3 text-right text-sm font-mono font-medium border-l border-gray-100 whitespace-nowrap ${
+                        mov.calculated_balance >= 0 ? 'text-blue-700' : 'text-red-600'
+                      }`} style={{ width: columnWidths[6] }}>
+                        {mov.calculated_balance}
+                      </td>
+                      
+                      <td className="px-5 py-3 text-[11px] font-medium text-gray-500 truncate hidden lg:table-cell" title={mov.reference_folio || mov.notes} style={{ width: columnWidths[7] }}>
+                        <span className="font-semibold text-gray-600">{mov.reference_folio || ''}</span>
+                        {mov.reference_folio && mov.notes && <span className="mx-1 text-gray-300">|</span>}
+                        <span className="italic">{mov.notes || ''}</span>
+                        {!mov.reference_folio && !mov.notes && '—'}
                       </td>
                     </tr>
                   );
@@ -452,12 +422,6 @@ export default function KardexProducto() {
             </tbody>
           </table>
         </div>
-
-        {!loading && filtered.length > 0 && (
-          <p className="text-[10px] font-bold text-gray-400 uppercase mt-3 text-center">
-            {filtered.length} movimiento{filtered.length !== 1 ? 's' : ''} · Máximo 300 registros por consulta
-          </p>
-        )}
       </div>
     </div>
   );
