@@ -25,9 +25,11 @@ Proceso documental jerárquico para trazabilidad total:
 3. **Lotes (`inventory_batches`):** El "ADN" del stock. Registra `batch_number`, `expiry_date`, e ID del documento de entrada.
 
 ## 5. TRAZABILIDAD Y KARDEX
-- **Movimientos Inmutables (`inventory_movements`):** Todo cambio de stock genera un registro con `movement_type` (`IN_PURCHASE`, `OUT_SALE`, `INTERNAL_TRANSFER`, `ADJUSTMENT`).
+- **Movimientos Inmutables (`inventory_movements`):** Todo cambio de stock genera un registro con `movement_type` estrictamente dentro de este catálogo: `SALE`, `RECEIPT`, `TRANSFER`, `ADJUSTMENT`.
 - **FEFO Guiado:** El sistema prioriza la salida del lote con vencimiento más cercano en la ubicación `SALES`.
 - **Vínculo Documental:** Cada movimiento de entrada DEBE estar vinculado a un `receipt_id` y registrar el costo unitario real.
+- **Ubicaciones Oficiales:** Para registrar origen y destino en `inventory_movements`, usar exclusivamente `from_location_id` y `to_location_id`.
+- **Campos Obsoletos:** `source_location_id` y `destination_location_id` son legados y no deben usarse en lógica nueva.
 
 ## 6. PATRONES DE INTERFAZ (UI/UX)
 - **Vistas Master-Detail:** El sistema evita modales para información compleja, utilizando `setView('detail')` para mantener la navegación limpia.

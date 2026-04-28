@@ -2,14 +2,16 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, ChevronRight, MapPin, Search,
-  Loader2, Calendar, Pill, EyeOff, Eye
+  Loader2, Calendar, Pill
 } from 'lucide-react';
 import { getPharmacySchema, getMyCompanyId } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 
 // Componente Switch para el toggle
-const Switch = ({ checked, onChange }) => (
+const Switch = ({ checked, onChange, id }) => (
   <button
+    id={id}
+    type="button"
     onClick={() => onChange(!checked)}
     className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 ${
       checked ? 'bg-[#4C3073]' : 'bg-gray-200'
@@ -23,13 +25,29 @@ const Switch = ({ checked, onChange }) => (
   </button>
 );
 
+const isInternalMovement = (mov, activeWarehouseId) => {
+  if (mov.movement_type === 'SALE') return false;
+
+  const fromWarehouseId = mov.from_loc?.warehouse_id;
+  const toWarehouseId = mov.to_loc?.warehouse_id;
+  const bothSidesInSameWarehouse = Boolean(fromWarehouseId && toWarehouseId && fromWarehouseId === toWarehouseId);
+  const legacyInternalSplitRow = mov.movement_type === 'INTERNAL_TRANSFER'
+    && (fromWarehouseId === activeWarehouseId || toWarehouseId === activeWarehouseId);
+
+  return bothSidesInSameWarehouse || legacyInternalSplitRow;
+};
+
 // Hook para redimensionamiento de columnas
 const useResizableColumns = (initialWidths) => {
   const [columnWidths, setColumnWidths] = useState(initialWidths);
   const resizingRef = useRef(null);
 
   const handleMouseDown = (index, e) => {
+    e.preventDefault();
+    e.stopPropagation();
     resizingRef.current = { index, startX: e.clientX, startWidth: columnWidths[index] };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
   };
@@ -47,6 +65,8 @@ const useResizableColumns = (initialWidths) => {
 
   const handleMouseUp = () => {
     resizingRef.current = null;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
     document.removeEventListener('mousemove', handleMouseMove);
     document.removeEventListener('mouseup', handleMouseUp);
   };
@@ -65,11 +85,12 @@ export default function KardexProducto() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [hideInternal, setHideInternal] = useState(false);
+  const [hideInternals, setHideInternals] = useState(false);
 
   // Anchos iniciales de columnas
-  const initialWidths = [120, 100, 300, 120, 100, 100, 120, 200];
+  const initialWidths = [140, 140, 420, 140, 96, 96, 96, 240];
   const { columnWidths, handleMouseDown } = useResizableColumns(initialWidths);
+  const tableMinWidth = useMemo(() => columnWidths.reduce((total, width) => total + width, 0), [columnWidths]);
 
   const formatLoc = (loc, warehouseName) => {
     if (!loc) return warehouseName || 'N/A';
@@ -90,15 +111,15 @@ export default function KardexProducto() {
     if (type === 'SALE') {
       origin = formatLoc(m.from_loc, fromWarehouseName);
       destination = "Venta a Público";
-    } else if (type === 'RECEIPT' || type === 'IN') {
+    } else if (type === 'RECEIPT') {
       origin = m.inventory_receipts?.suppliers?.legal_name 
                ? 'Proveedor: ' + m.inventory_receipts.suppliers.legal_name 
                : 'Ingreso Externo';
       destination = formatLoc(m.to_loc, toWarehouseName);
-    } else if (type === 'INTERNAL_TRANSFER') {
+    } else if (type === 'TRANSFER') {
       origin = formatLoc(m.from_loc, fromWarehouseName);
       destination = formatLoc(m.to_loc, toWarehouseName);
-    } else if (type === 'TRANSFER' || type.includes('TRANSFER')) {
+    } else if (type === 'ADJUSTMENT') {
       origin = formatLoc(m.from_loc, fromWarehouseName);
       destination = formatLoc(m.to_loc, toWarehouseName);
     } else {
@@ -166,7 +187,7 @@ export default function KardexProducto() {
             let saldoAcumulado = 0;
             const movementsWithBalance = (data || []).map(mov => {
               const qty = Number(mov.quantity) || 0;
-              const isInternal = mov.from_loc?.warehouse_id === mov.to_loc?.warehouse_id;
+              const isInternal = isInternalMovement(mov, activeWarehouse.id);
               
               // Solo los movimientos que no son internos afectan el saldo
               if (!isInternal) {
@@ -190,10 +211,6 @@ export default function KardexProducto() {
   const processedRows = useMemo(() => {
     let filteredData = [...rows];
 
-    if (hideInternal) {
-      filteredData = filteredData.filter(r => !r.is_internal);
-    }
-
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       filteredData = filteredData.filter(r => {
@@ -209,7 +226,17 @@ export default function KardexProducto() {
       });
     }
     return filteredData;
-  }, [rows, searchTerm, hideInternal]);
+  }, [rows, searchTerm]);
+
+  const visibleRows = useMemo(() => {
+    let filteredData = [...processedRows];
+
+    if (hideInternals) {
+      filteredData = filteredData.filter(r => r.movement_type === 'SALE' || !r.is_internal);
+    }
+
+    return filteredData;
+  }, [processedRows, hideInternals]);
 
   const totals = useMemo(() => {
     return processedRows.reduce((acc, r) => {
@@ -229,12 +256,13 @@ export default function KardexProducto() {
   };
 
   const getTipoHumano = (type, isInternal) => {
-    if (isInternal) return 'Acomodo Interno';
-    const map = { 
-      'SALE': 'Venta', 'RECEIPT': 'Compra', 'IN': 'Ingreso', 
-      'OUT': 'Salida', 'TRANSFER': 'Traspaso', 'ADJUSTMENT': 'Ajuste' 
+    const map = {
+      'SALE': 'Venta',
+      'RECEIPT': 'Ingreso / Compra',
+      'TRANSFER': 'Traspaso',
+      'ADJUSTMENT': 'Ajuste',
     };
-    return map[type] || type;
+    return map[type] || (isInternal ? 'Traspaso' : type);
   };
 
   if (!activeWarehouse || !product) {
@@ -287,7 +315,7 @@ export default function KardexProducto() {
         </div>
 
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full md:w-auto">
+          <div className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center gap-4 w-full md:w-auto">
             <div className="flex items-center gap-3 border border-gray-200 rounded-xl px-4 py-2 bg-gray-50 shadow-inner">
               <Calendar size={14} className="text-gray-400" />
               <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="bg-transparent text-xs font-black text-gray-700 outline-none" />
@@ -300,9 +328,9 @@ export default function KardexProducto() {
                 className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-xs font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all" />
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <label htmlFor="hide-internal-switch" className="text-[10px] font-black text-gray-500 uppercase">Ocultar Internos</label>
-            <Switch checked={hideInternal} onChange={setHideInternal} />
+          <div className="flex items-center gap-2 flex-wrap">
+            <label htmlFor="hide-internal-switch" className="text-[10px] font-black text-gray-500 uppercase">No mostrar traspasos internos</label>
+            <Switch id="hide-internal-switch" checked={hideInternals} onChange={setHideInternals} />
           </div>
         </div>
 
@@ -326,93 +354,98 @@ export default function KardexProducto() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-x-auto p-6">
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <table className="w-full text-left border-collapse">
+      <div className="flex-1 p-6">
+        <div className="overflow-x-auto shadow ring-1 ring-black ring-opacity-5 md:rounded-lg bg-white">
+          <table className="min-w-full table-fixed text-left border-collapse text-xs sm:text-sm" style={{ width: `max(100%, ${tableMinWidth}px)` }}>
+            <colgroup>
+              {columnWidths.map((width, index) => (
+                <col key={index} style={{ width: `${width}px` }} />
+              ))}
+            </colgroup>
             <thead>
               <tr className="bg-gray-50/70 border-b border-gray-200">
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative" style={{ width: columnWidths[0] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative resize-x overflow-hidden" style={{ width: columnWidths[0] }}>
                   Fecha
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(0, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(0, e)} title="Redimensionar columna"></div>
                 </th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative" style={{ width: columnWidths[1] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative resize-x overflow-hidden" style={{ width: columnWidths[1] }}>
                   Tipo
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(1, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(1, e)} title="Redimensionar columna"></div>
                 </th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative hidden md:table-cell" style={{ width: columnWidths[2] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative min-w-[300px] lg:min-w-[400px] resize-x overflow-hidden" style={{ width: columnWidths[2] }}>
                   Origen ➔ Destino
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(2, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(2, e)} title="Redimensionar columna"></div>
                 </th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative" style={{ width: columnWidths[3] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative resize-x overflow-hidden" style={{ width: columnWidths[3] }}>
                   Lote
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(3, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(3, e)} title="Redimensionar columna"></div>
                 </th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap text-right relative" style={{ width: columnWidths[4] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-widest whitespace-nowrap text-right relative resize-x overflow-hidden" style={{ width: columnWidths[4] }}>
                   Entrada
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(4, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(4, e)} title="Redimensionar columna"></div>
                 </th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap text-right relative" style={{ width: columnWidths[5] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-widest whitespace-nowrap text-right relative resize-x overflow-hidden" style={{ width: columnWidths[5] }}>
                   Salida
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(5, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(5, e)} title="Redimensionar columna"></div>
                 </th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-800 uppercase tracking-widest whitespace-nowrap text-right bg-gray-100 relative" style={{ width: columnWidths[6] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-800 uppercase tracking-widest whitespace-nowrap text-right bg-gray-100 relative resize-x overflow-hidden" style={{ width: columnWidths[6] }}>
                   Saldo
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(6, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(6, e)} title="Redimensionar columna"></div>
                 </th>
-                <th className="px-5 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative hidden lg:table-cell" style={{ width: columnWidths[7] }}>
+                <th className="px-5 py-4 text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-widest whitespace-nowrap relative resize-x overflow-hidden" style={{ width: columnWidths[7] }}>
                   Folio / Ref
-                  <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-gray-300 hover:bg-gray-400" onMouseDown={(e) => handleMouseDown(7, e)}></div>
+                  <div className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-[#4C3073]/30" onMouseDown={(e) => handleMouseDown(7, e)} title="Redimensionar columna"></div>
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
                 <tr><td colSpan="8" className="px-6 py-24 text-center"><Loader2 className="animate-spin inline mr-3 text-purple-600" size={24} /> <span className="text-sm font-black text-gray-400 uppercase tracking-widest">Consultando Ledger...</span></td></tr>
-              ) : processedRows.length === 0 ? (
-                <tr><td colSpan="8" className="px-6 py-24 text-center text-gray-300 uppercase text-[11px] font-black tracking-widest italic">No se registran movimientos en este nodo</td></tr>
-              ) : (
-                processedRows.map((mov, idx) => {
+                ) : visibleRows.length === 0 ? (
+                  <tr><td colSpan="8" className="px-6 py-24 text-center text-gray-300 uppercase text-[11px] font-black tracking-widest italic">No se registran movimientos en este nodo</td></tr>
+                ) : (
+                  visibleRows.map((mov, idx) => {
                   const { origin, destination } = formatRoute(mov);
                   const qty = Number(mov.quantity) || 0;
                   const textColor = mov.is_internal ? 'text-gray-400' : (qty > 0 ? 'text-green-700' : 'text-red-700');
 
                   return (
                     <tr key={idx} className="hover:bg-gray-50/50 transition-colors group">
-                      <td className="px-5 py-3 text-[11px] font-bold text-gray-500 whitespace-nowrap" style={{ width: columnWidths[0] }}>{fmtDate(mov.created_at)}</td>
-                      <td className="px-5 py-3 whitespace-nowrap" style={{ width: columnWidths[1] }}>
-                        <span className="text-[10px] font-black text-gray-600">
-                          {getTipoHumano(mov.movement_type, mov.is_internal)}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-sm text-gray-800 whitespace-nowrap hidden md:table-cell" style={{ width: columnWidths[2] }}>
-                         <span title={origin}>{origin}</span>
-                         <span className="text-gray-400 font-light mx-2">➔</span>
-                         <span className="font-semibold" title={destination}>{destination}</span>
-                      </td>
-                      <td className="px-5 py-3 whitespace-nowrap" style={{ width: columnWidths[3] }}>
-                        <span className="text-[11px] font-mono text-gray-700">
-                          {mov.inventory_batches?.batch_number || 'S/L'}
-                        </span>
-                      </td>
-                      
-                      <td className={`px-5 py-3 text-right text-sm font-mono font-medium whitespace-nowrap ${textColor}`} style={{ width: columnWidths[4] }}>
-                        {qty > 0 ? `+${qty}` : ''}
-                      </td>
-                      
-                      <td className={`px-5 py-3 text-right text-sm font-mono font-medium whitespace-nowrap ${textColor}`} style={{ width: columnWidths[5] }}>
-                        {qty < 0 ? `${qty}` : ''}
-                      </td>
-                      
-                      <td className={`px-5 py-3 text-right text-sm font-mono font-medium border-l border-gray-100 whitespace-nowrap ${
-                        mov.calculated_balance >= 0 ? 'text-blue-700' : 'text-red-600'
-                      }`} style={{ width: columnWidths[6] }}>
-                        {mov.calculated_balance}
-                      </td>
-                      
-                      <td className="px-5 py-3 text-[11px] font-medium text-gray-500 truncate hidden lg:table-cell" title={mov.reference_folio || mov.notes} style={{ width: columnWidths[7] }}>
-                        <span className="font-semibold text-gray-600">{mov.reference_folio || ''}</span>
-                        {mov.reference_folio && mov.notes && <span className="mx-1 text-gray-300">|</span>}
-                        <span className="italic">{mov.notes || ''}</span>
+                       <td className="px-5 py-3 text-[11px] sm:text-xs font-bold text-gray-500 whitespace-nowrap" style={{ width: columnWidths[0] }}>{fmtDate(mov.created_at)}</td>
+                       <td className="px-5 py-3 whitespace-nowrap" style={{ width: columnWidths[1] }}>
+                         <span className="text-[10px] sm:text-xs font-black text-gray-600 whitespace-nowrap">
+                           {getTipoHumano(mov.movement_type, mov.is_internal)}
+                         </span>
+                       </td>
+                       <td className="px-5 py-3 text-xs sm:text-sm text-gray-800 whitespace-nowrap min-w-[300px] lg:min-w-[400px]" style={{ width: columnWidths[2] }}>
+                          <span className="inline-block max-w-full truncate align-middle" title={origin}>{origin}</span>
+                          <span className="text-gray-400 font-light mx-2">➔</span>
+                          <span className="inline-block max-w-full truncate font-semibold align-middle" title={destination}>{destination}</span>
+                       </td>
+                       <td className="px-5 py-3 whitespace-nowrap" style={{ width: columnWidths[3] }}>
+                         <span className="text-[11px] sm:text-xs font-mono text-gray-700 whitespace-nowrap truncate block">
+                           {mov.inventory_batches?.batch_number || 'S/L'}
+                         </span>
+                       </td>
+
+                       <td className={`px-5 py-3 text-right text-xs sm:text-sm font-mono font-medium whitespace-nowrap ${textColor}`} style={{ width: columnWidths[4] }}>
+                         {qty > 0 ? `+${qty}` : ''}
+                       </td>
+
+                       <td className={`px-5 py-3 text-right text-xs sm:text-sm font-mono font-medium whitespace-nowrap ${textColor}`} style={{ width: columnWidths[5] }}>
+                         {qty < 0 ? `${qty}` : ''}
+                       </td>
+
+                       <td className={`px-5 py-3 text-right text-xs sm:text-sm font-mono font-medium border-l border-gray-100 whitespace-nowrap ${
+                         mov.calculated_balance >= 0 ? 'text-blue-700' : 'text-red-600'
+                       }`} style={{ width: columnWidths[6] }}>
+                         {mov.calculated_balance}
+                       </td>
+
+                       <td className="px-5 py-3 text-[11px] sm:text-xs font-medium text-gray-500 truncate" title={mov.reference_folio || mov.notes} style={{ width: columnWidths[7] }}>
+                         <span className="font-semibold text-gray-600">{mov.reference_folio || ''}</span>
+                         {mov.reference_folio && mov.notes && <span className="mx-1 text-gray-300">|</span>}
+                         <span className="italic">{mov.notes || ''}</span>
                         {!mov.reference_folio && !mov.notes && '—'}
                       </td>
                     </tr>
