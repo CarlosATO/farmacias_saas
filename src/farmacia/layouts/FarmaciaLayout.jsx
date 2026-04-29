@@ -1,246 +1,309 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../../api/supabaseClient';
 import { useSucursal } from '../context/SucursalContext';
-
-// Icons
 import {
-    LayoutDashboard,
-    Pill,
-    FileText,
-    Users,
-    LogOut,
-    ShoppingCart,
-    Truck,
-    DollarSign,
-    MapPin,
-    ArrowRightLeft,
-    Building2
+  ArrowRightLeft,
+  Building2,
+  DollarSign,
+  FileText,
+  LayoutDashboard,
+  LogOut,
+  MapPin,
+  Package,
+  Pill,
+  Receipt,
+  Settings,
+  ShoppingCart,
+  Truck,
+  User,
+  Wallet,
+  Warehouse,
 } from 'lucide-react';
 
-const buildRibbonTabs = () => {
-    return [
-        {
-            id: 'inicio',
-            label: 'Archivo',
-            icon: LayoutDashboard,
-            items: [
-                { to: '/', label: 'Dashboard Principal', icon: LayoutDashboard },
-            ],
-        },
-        {
-            id: 'operaciones',
-            label: 'Operaciones',
-            icon: ShoppingCart,
-            items: [
-                { to: '/pos', label: 'Terminal POS', icon: ShoppingCart },
-                { to: '/recetas', label: 'Recetas Electrónicas', icon: FileText },
-                { to: '/pacientes', label: 'Gestión de Pacientes', icon: Users },
-            ],
-        },
-        {
-            id: 'logistica',
-            label: 'Logística & WMS',
-            icon: Truck,
-            items: [
-                { to: '/logistica', label: 'Órdenes de Compra', icon: Truck },
-                { to: '/traspasos', label: 'Consola Traspasos', icon: ArrowRightLeft },
-                { to: '/recepcion-traspasos', label: 'Recepción Traspasos', icon: ArrowRightLeft },
-                { to: '/mapa-logistico', label: 'Bodegas y ubicaciones', icon: MapPin },
-            ],
-        },
-        {
-            id: 'catalogo',
-            label: 'Catálogo & Precios',
-            icon: Pill,
-            items: [
-                { to: '/administracion/medicamentos', label: 'Maestro Productos', icon: Pill },
-                { to: '/inventario', label: 'Stock e Inventario', icon: Pill },
-                { to: '/administracion/proveedores', label: 'Proveedores', icon: Users },
-                { to: '/sucursales', label: 'Locales y Sedes', icon: Building2 },
-                { to: '/pricing', label: 'Estrategia Precios', icon: DollarSign },
-            ],
-        },
-    ];
+const RIBBON_TABS = [
+  {
+    id: 'principal',
+    label: 'Principal',
+    type: 'link',
+    to: '/',
+    icon: LayoutDashboard,
+    match: ['/'],
+    exact: true,
+    items: [
+      { to: '/', label: 'Dashboard', icon: LayoutDashboard, match: ['/'], exact: true },
+    ],
+  },
+  {
+    id: 'inventario',
+    label: 'Inventario',
+    type: 'group',
+    match: ['/inventario', '/administracion/medicamentos', '/mapa-lotes', '/kardex', '/traspasos', '/recepcion-traspasos'],
+    items: [
+      { to: '/inventario', label: 'Inventario', icon: Package, match: ['/inventario'] },
+      { to: '/administracion/medicamentos', label: 'Catalogo', icon: Pill, match: ['/administracion/medicamentos'] },
+      { to: '/mapa-lotes', label: 'Mapa de Lotes', icon: Warehouse, match: ['/mapa-lotes'] },
+      { to: '/kardex', label: 'Kardex', icon: Receipt, match: ['/kardex'] },
+      { to: '/traspasos', label: 'Emitir Traspasos', icon: ArrowRightLeft, match: ['/traspasos'] },
+      { to: '/recepcion-traspasos', label: 'Recepcion Traspasos', icon: ArrowRightLeft, match: ['/recepcion-traspasos'] },
+    ],
+  },
+  {
+    id: 'ventas',
+    label: 'Ventas',
+    type: 'group',
+    match: ['/pos', '/control-caja', '/pricing', '/recetas'],
+    items: [
+      { to: '/pos', label: 'POS', icon: ShoppingCart, match: ['/pos'] },
+      { to: '/control-caja', label: 'Control de Caja', icon: Wallet, match: ['/control-caja'] },
+      { to: '/pricing', label: 'Precios', icon: DollarSign, match: ['/pricing'] },
+      { to: '/recetas', label: 'Recetas', icon: FileText, match: ['/recetas'] },
+    ],
+  },
+  {
+    id: 'compras',
+    label: 'Compras',
+    type: 'link',
+    to: '/logistica',
+    icon: Truck,
+    match: ['/logistica'],
+    items: [
+      { to: '/logistica', label: 'Ordenes de Compra', icon: Truck, match: ['/logistica'] },
+    ],
+  },
+  {
+    id: 'entidades',
+    label: 'Entidades',
+    type: 'group',
+    match: ['/pacientes', '/administracion/proveedores'],
+    items: [
+      { to: '/pacientes', label: 'Pacientes', icon: User, match: ['/pacientes'] },
+      { to: '/administracion/proveedores', label: 'Proveedores', icon: Building2, match: ['/administracion/proveedores'] },
+    ],
+  },
+  {
+    id: 'configuracion',
+    label: 'Configuracion',
+    type: 'group',
+    match: ['/sucursales', '/mapa-logistico', '/operadores-pos'],
+    items: [
+      { to: '/sucursales', label: 'Sucursales', icon: Building2, match: ['/sucursales'] },
+      { to: '/operadores-pos', label: 'Operadores POS', icon: User, match: ['/operadores-pos'] },
+      { to: '/mapa-logistico', label: 'Ubicaciones', icon: MapPin, match: ['/mapa-logistico'] },
+      { label: 'SII', icon: Settings, disabled: true },
+    ],
+  },
+];
+
+const matchesPath = (pathname, item) => {
+  if (!item.match || item.match.length === 0) return false;
+  return item.match.some((basePath) => {
+    if (item.exact) return pathname === basePath;
+    return pathname === basePath || pathname.startsWith(`${basePath}/`);
+  });
 };
 
 export default function FarmaciaLayout() {
-    const navigate = useNavigate();
-    const location = useLocation();
-    const [userRole, setUserRole]           = useState('Farmacéutico');
-    const [userName, setUserName]           = useState('');
-    const [loadingData, setLoadingData]     = useState(true);
-    
-    // Global Branch Context
-    const { activeWarehouse, setActiveWarehouse, warehouses } = useSucursal();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { activeWarehouse, setActiveWarehouse, warehouses } = useSucursal();
+  const [userRole, setUserRole] = useState('Farmaceutico');
+  const [userName, setUserName] = useState('');
+  const [loadingData, setLoadingData] = useState(true);
+  const [activeTab, setActiveTab] = useState('principal');
 
-    // Excel-style Ribbon State
-    const tabs = useMemo(() => buildRibbonTabs(), []);
-    const [activeTabId, setActiveTabId] = useState(() => {
-        const currentPath = window.location.pathname;
-        const foundTab = tabs.find(t => t.items.some(i => i.to === currentPath || (i.to !== '/' && currentPath.startsWith(i.to))));
-        return foundTab ? foundTab.id : 'inicio';
-    });
+  const fetchUserData = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-    const fetchUserData = useCallback(async () => {
-        try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
-            setUserName(user.email.split('@')[0].toUpperCase());
+      const emailName = user.email?.split('@')[0] || 'usuario';
+      const fullName = user.user_metadata?.full_name || user.user_metadata?.name || emailName;
+      setUserName(fullName);
+      setUserRole(user.app_metadata?.role || 'MEMBER');
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoadingData(false);
+    }
+  }, []);
 
-            const role = user.app_metadata?.role || 'MEMBER';
-            setUserRole(role);
-        } catch (err) { console.error(err); } finally { setLoadingData(false); }
-    }, []);
+  useEffect(() => {
+    fetchUserData();
+  }, [fetchUserData]);
 
-    useEffect(() => { 
-        fetchUserData();
-    }, [fetchUserData]);
+  useEffect(() => {
+    const matchedTab = RIBBON_TABS.find((tab) => matchesPath(location.pathname, tab) || tab.items.some((item) => matchesPath(location.pathname, item)));
+    setActiveTab(matchedTab?.id || 'principal');
+  }, [location.pathname]);
 
-    // Sync active tab with location (only when path changes)
-    useEffect(() => {
-        const currentPath = location.pathname;
-        const foundTab = tabs.find(t => t.items.some(i => i.to === currentPath || (i.to !== '/' && currentPath.startsWith(i.to))));
-        if (foundTab) {
-            setActiveTabId(foundTab.id);
-        }
-    }, [location.pathname, tabs]);
+  const displayName = useMemo(() => userName.toUpperCase(), [userName]);
+  const initials = useMemo(() => displayName.split(' ').filter(Boolean).slice(0, 2).map((part) => part[0]).join('') || 'US', [displayName]);
+  const currentTab = useMemo(() => RIBBON_TABS.find((tab) => tab.id === activeTab) || RIBBON_TABS[0], [activeTab]);
 
-    // Sync active tab with location (only when path changes)
-    useEffect(() => {
-        const currentPath = location.pathname;
-        const foundTab = tabs.find(t => t.items.some(i => i.to === currentPath || (i.to !== '/' && currentPath.startsWith(i.to))));
-        if (foundTab) {
-            setActiveTabId(foundTab.id);
-        }
-    }, [location.pathname, tabs]);
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('Error cerrando sesion:', error);
+    } finally {
+      window.location.href = 'http://localhost:3000/login';
+    }
+  };
 
-    if (loadingData) return <div className="h-screen bg-gray-50 flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#4C3073]"></div></div>;
-
-    const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
-
+  if (loadingData) {
     return (
-        <div className="flex flex-col h-screen font-sans text-white/90 text-[13px] overflow-hidden" style={{ backgroundColor: '#F3F4F6' }}>
-            
-            {/* TOP BAR: Brand & User (Excel Style Title Bar) */}
-            <header 
-              style={{ backgroundColor: '#4C3073' }}
-              className="flex h-10 shrink-0 items-center justify-between px-4 text-white z-[110] border-b border-white/10"
-            >
-                <div className="flex items-center gap-4">
-                    <div 
-                        onClick={() => navigate('/')}
-                        className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-                    >
-                        <span className="font-black tracking-tight text-white flex items-center gap-1.5 uppercase text-[11px]">
-                            <span className="bg-white text-[#4C3073] px-1.5 py-0.5 rounded text-[9px] font-black">DX</span>
-                            FarmaDATIX SaaS
-                        </span>
-                    </div>
-                    <div className="h-4 w-px bg-white/20 mx-1"></div>
-                    
-                    {/* BRANCH SELECTOR */}
-                    <div className="flex items-center gap-2 bg-white/10 border border-white/10 px-2 py-1 rounded-md">
-                        <MapPin size={12} className="text-white/60" />
-                        <select 
-                            value={activeWarehouse?.id || ''}
-                            onChange={(e) => {
-                                const selected = warehouses.find(w => w.id === e.target.value);
-                                if (selected) setActiveWarehouse(selected);
-                            }}
-                            className="bg-transparent text-[10px] font-black uppercase text-white outline-none cursor-pointer pr-4 appearance-none"
-                        >
-                            {warehouses.map(w => (
-                                <option key={w.id} value={w.id} className="text-gray-800 font-bold">{w.name}</option>
-                            ))}
-                        </select>
-                    </div>
-                </div>
+      <div className="h-screen bg-[#f8f9fa] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#4C3073]"></div>
+      </div>
+    );
+  }
 
-                <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10">
-                        <div className="flex flex-col items-end hidden sm:flex leading-tight">
-                            <span className="text-[9px] font-bold text-white uppercase">{userName}</span>
-                            <span className="text-[7px] text-white/40 uppercase tracking-tighter">{userRole}</span>
-                        </div>
-                        <div className="h-6 w-6 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold border border-white/20">
-                            {userName.substring(0, 2)}
-                        </div>
-                    </div>
-                    <button 
-                        onClick={async () => {
-                            const { data: { session } } = await supabase.auth.getSession();
-                            if (session) {
-                                window.location.href = `http://localhost:3000/portal#access_token=${session.access_token}&refresh_token=${session.refresh_token}`;
-                            } else {
-                                window.location.href = 'http://localhost:3000/login';
-                            }
-                        }}
-                        className="hover:bg-red-500/20 p-1.5 rounded transition-colors group"
+  return (
+    <div className="flex flex-col h-screen bg-[#f8f9fa] text-gray-900 overflow-hidden">
+      <header className="shrink-0 border-b border-gray-200 bg-white shadow-sm z-[120]">
+        <div className="bg-[#4C3073] border-b border-white/10">
+          <div className="h-14 px-4 lg:px-6 flex items-center justify-between gap-3">
+            <div className="flex flex-1 items-center gap-3 min-w-0 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => navigate('/')}
+                className="flex items-center gap-2 shrink-0"
+              >
+                <span className="bg-white text-[#4C3073] px-2 py-1 rounded text-[10px] font-black">DX</span>
+                <span className="hidden xl:block text-[11px] font-black uppercase tracking-widest text-white whitespace-nowrap">FarmaDATIX SaaS</span>
+              </button>
+
+              <div className="hidden xl:flex items-end self-end min-w-0 overflow-x-auto no-scrollbar">
+                {RIBBON_TABS.map((tab) => {
+                  const isActive = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveTab(tab.id);
+                        if (tab.type === 'link' && tab.to) navigate(tab.to);
+                      }}
+                      className={`px-3 2xl:px-4 py-3 text-[11px] font-black uppercase tracking-wider whitespace-nowrap border-t border-l border-r transition-colors ${isActive
+                        ? 'bg-white text-[#4C3073] border-white rounded-t-lg'
+                        : 'bg-transparent text-white/75 border-transparent hover:text-white'
+                        }`}
                     >
-                        <LogOut size={14} className="text-white/60 group-hover:text-red-400" />
+                      {tab.label}
                     </button>
-                </div>
-            </header>
-
-            {/* RIBBON BAR (Excel Style) */}
-            <div className="flex flex-col shrink-0 z-[100] shadow-md border-b border-gray-200" style={{ backgroundColor: '#FFFFFF' }}>
-                
-                {/* Ribbon Tabs */}
-                <div className="flex px-4 bg-gray-50 border-b border-gray-200">
-                    {tabs.map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTabId(tab.id)}
-                            className={`px-6 py-2 text-[11px] font-bold uppercase tracking-wider transition-all border-b-2
-                                ${activeTabId === tab.id 
-                                    ? 'bg-white border-[#4C3073] text-[#4C3073] shadow-[0_-2px_0_inset_#4C3073]' 
-                                    : 'border-transparent text-gray-400 hover:text-gray-600 hover:bg-gray-100'
-                                }`}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
-                </div>
-
-                {/* Ribbon Content (Actions) */}
-                <div className="flex items-center gap-1 p-2 bg-white overflow-x-auto no-scrollbar">
-                    {activeTab.items.map(item => {
-                        const isActive = location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(item.to));
-                        const Icon = item.icon;
-                        return (
-                            <button
-                                key={item.to}
-                                onClick={() => navigate(item.to)}
-                                className={`flex flex-col items-center justify-center min-w-[80px] h-16 rounded-md transition-all group px-2
-                                    ${isActive 
-                                        ? 'bg-purple-50 text-[#4C3073] ring-1 ring-purple-200' 
-                                        : 'text-gray-500 hover:bg-gray-100'
-                                    }`}
-                            >
-                                <Icon size={20} className={`${isActive ? 'text-[#4C3073]' : 'text-gray-400 group-hover:text-gray-600'} transition-colors mb-1`} />
-                                <span className={`text-[9px] font-bold uppercase tracking-tighter text-center leading-[10px] ${isActive ? 'text-[#4C3073]' : 'text-gray-500'}`}>
-                                    {item.label}
-                                </span>
-                            </button>
-                        );
-                    })}
-                    
-                    <div className="flex-1"></div>
-                    
-                    <div className="flex items-center gap-4 px-4 border-l border-gray-100 h-12 ml-2">
-                        <div className="flex flex-col">
-                            <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest leading-none">Sistema</span>
-                            <span className="text-[10px] font-black text-[#4C3073]">ACTIVE_ERP_V1</span>
-                        </div>
-                    </div>
-                </div>
+                  );
+                })}
+              </div>
             </div>
 
-            {/* Main Content Area */}
-            <main className="flex-1 overflow-auto relative bg-gray-50 text-gray-800">
-                <Outlet />
-            </main>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="hidden lg:flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 w-[170px] xl:w-[320px]">
+                <MapPin size={16} className="text-white/70 shrink-0" />
+                <label htmlFor="warehouse-selector-top" className="hidden xl:block text-[10px] font-black text-white/60 uppercase tracking-widest shrink-0">Sucursal</label>
+                <select
+                  id="warehouse-selector-top"
+                  value={activeWarehouse?.id || ''}
+                  onChange={(e) => {
+                    const selected = warehouses.find((warehouse) => warehouse.id === e.target.value);
+                    if (selected) setActiveWarehouse(selected);
+                  }}
+                  className="bg-transparent text-xs xl:text-sm font-black text-white outline-none min-w-0 flex-1"
+                >
+                  {warehouses.map((warehouse) => (
+                    <option key={warehouse.id} value={warehouse.id} className="text-gray-800">
+                      {warehouse.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-white/10 border border-white/20 text-white flex items-center justify-center text-[10px] font-black shrink-0">
+                  {initials}
+                </div>
+                <div className="hidden 2xl:block text-right leading-tight min-w-0">
+                  <p className="text-[10px] font-black text-white uppercase">{displayName}</p>
+                  <p className="text-[9px] font-bold text-white/55 uppercase tracking-wide">{userRole}</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 text-[11px] font-black uppercase text-white hover:bg-white/15 transition-colors"
+              >
+                <LogOut size={16} />
+                <span className="hidden 2xl:inline">Cerrar Sesion</span>
+              </button>
+            </div>
+          </div>
         </div>
-    );
+
+        <div className="bg-white border-t border-gray-100 shadow-sm">
+          <div className="px-4 lg:px-6 py-2 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-2 min-w-max">
+              {currentTab.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = item.to ? matchesPath(location.pathname, item) : false;
+
+                if (item.disabled) {
+                  return (
+                    <div
+                      key={`${currentTab.id}-${item.label}`}
+                      className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-bold uppercase text-gray-300 cursor-not-allowed"
+                    >
+                      <Icon size={16} className="text-gray-300" />
+                      <span>{item.label}</span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.exact}
+                    className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-black uppercase tracking-wide transition-colors ${isActive
+                      ? 'bg-[#4C3073] text-white'
+                      : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                  >
+                    <Icon size={16} className={isActive ? 'text-white' : 'text-gray-400'} />
+                    <span>{item.label}</span>
+                  </NavLink>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="xl:hidden bg-[#4C3073] border-t border-white/10 px-4 py-2 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-2 min-w-max">
+            {RIBBON_TABS.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    if (tab.type === 'link' && tab.to) navigate(tab.to);
+                  }}
+                  className={`rounded-lg px-3 py-2 text-[11px] font-black uppercase whitespace-nowrap ${isActive ? 'bg-white text-[#4C3073]' : 'bg-white/10 text-white'
+                    }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 overflow-auto bg-[#f8f9fa]">
+        <Outlet />
+      </main>
+    </div>
+  );
 }

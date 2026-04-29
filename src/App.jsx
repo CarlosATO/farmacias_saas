@@ -16,10 +16,14 @@ const GestorUbicaciones = lazy(() => import('./farmacia/pages/GestorUbicaciones'
 const TraspasosInternos = lazy(() => import('./farmacia/pages/TraspasosInternos'));
 const RecepcionTraspasos = lazy(() => import('./farmacia/pages/RecepcionTraspasos'));
 const KardexProducto = lazy(() => import('./farmacia/pages/KardexProducto'));
+const KardexIndex = lazy(() => import('./farmacia/pages/KardexIndex'));
 const AdminSucursales = lazy(() => import('./farmacia/pages/AdminSucursales'));
 import { SucursalProvider } from './farmacia/context/SucursalContext';
 import GestionPrecios from './farmacia/pages/GestionPrecios';
 const MapaLotes = lazy(() => import('./farmacia/pages/MapaLotes'));
+const MapaLotesIndex = lazy(() => import('./farmacia/pages/MapaLotesIndex'));
+const ControlCaja = lazy(() => import('./farmacia/pages/ControlCaja'));
+const OperadoresPOS = lazy(() => import('./farmacia/pages/OperadoresPOS'));
 
 const PageLoader = () => (
   <div className="h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -96,9 +100,13 @@ export default function App() {
             <Route path="mapa-logistico/gestor/:locationId" element={<Suspense fallback={<PageLoader />}><GestorUbicaciones /></Suspense>} />
             <Route path="traspasos" element={<Suspense fallback={<PageLoader />}><TraspasosInternos /></Suspense>} />
             <Route path="recepcion-traspasos" element={<Suspense fallback={<PageLoader />}><RecepcionTraspasos /></Suspense>} />
+            <Route path="kardex" element={<Suspense fallback={<PageLoader />}><KardexIndex /></Suspense>} />
             <Route path="kardex/:productId" element={<Suspense fallback={<PageLoader />}><KardexProducto /></Suspense>} />
+            <Route path="mapa-lotes" element={<Suspense fallback={<PageLoader />}><MapaLotesIndex /></Suspense>} />
             <Route path="mapa-lotes/:productId" element={<Suspense fallback={<PageLoader />}><MapaLotes /></Suspense>} />
             <Route path="sucursales" element={<Suspense fallback={<PageLoader />}><AdminSucursales /></Suspense>} />
+            <Route path="operadores-pos" element={<Suspense fallback={<PageLoader />}><OperadoresPOS /></Suspense>} />
+            <Route path="control-caja" element={<Suspense fallback={<PageLoader />}><ControlCaja /></Suspense>} />
             <Route path="pricing" element={<GestionPrecios />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

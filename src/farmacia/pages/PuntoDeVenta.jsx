@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ShoppingCart, Search, Plus, Trash2, ShieldAlert, FlaskConical,
-  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode
+  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet
 } from 'lucide-react';
 import {
-  fetchPharmacyProducts, fetchPrescriptions, createSaleWithItems, fetchInventoryStock, fetchPricesByWarehouse
+  fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchOpenPosSession, fetchPricesByWarehouse
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
@@ -12,7 +12,6 @@ import CheckoutModal from '../components/CheckoutModal';
 export default function PuntoDeVenta() {
   const { activeWarehouse } = useSucursal();
   const [products, setProducts] = useState([]);
-  const [stockMap, setStockMap] = useState({});       // { product_id: totalQty }
   const [prescriptions, setPrescriptions] = useState([]);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -23,6 +22,8 @@ export default function PuntoDeVenta() {
   const [selectedPrescription, setSelectedPrescription] = useState('');
   const [isProcessingSale, setIsProcessingSale] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [quickCashModal, setQuickCashModal] = useState({ open: false, amount: '', reason: '' });
+  const [activeSession, setActiveSession] = useState(null);
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
 
@@ -31,22 +32,37 @@ export default function PuntoDeVenta() {
     if (!activeWarehouse?.id) return;
     setLoading(true);
     try {
-      const [prodRes, preRes, stockRes, priceRes] = await Promise.all([
+      const [prodRes, preRes, stockRes, priceRes, sessionRes] = await Promise.all([
         fetchPharmacyProducts(),
         fetchPrescriptions(),
         fetchInventoryStock(activeWarehouse.id),
-        fetchPricesByWarehouse(activeWarehouse.id)
+        fetchPricesByWarehouse(activeWarehouse.id),
+        fetchOpenPosSession(activeWarehouse.id),
       ]);
 
       const prodData = prodRes.data || [];
       const stockData = stockRes.data || [];
       const priceData = priceRes.data || [];
       const preData = preRes.data?.filter(p => p.status === 'PENDING') || [];
+      const currentSession = sessionRes.data || null;
 
-      // 1. Armar mapa de stock por producto
+      // 1. Armar mapa de stock vendible vs cuarentena por producto
       const stockMapLocal = {};
       stockData.forEach(batch => {
-        stockMapLocal[batch.product_id] = (stockMapLocal[batch.product_id] || 0) + Number(batch.current_quantity || 0);
+        const qty = Number(batch.current_quantity || 0);
+        const locationType = batch.location?.location_type?.toUpperCase();
+        const locationName = batch.location?.name?.toLowerCase() || '';
+        const isQuarantine = locationType === 'QUARANTINE' || locationName.includes('cuarentena');
+
+        if (!stockMapLocal[batch.product_id]) {
+          stockMapLocal[batch.product_id] = { disponible: 0, cuarentena: 0 };
+        }
+
+        if (isQuarantine) {
+          stockMapLocal[batch.product_id].cuarentena += qty;
+        } else {
+          stockMapLocal[batch.product_id].disponible += qty;
+        }
       });
 
       // 2. Armar mapa de precios locales
@@ -56,17 +72,23 @@ export default function PuntoDeVenta() {
       });
 
       // 3. Enriquecer el catálogo ORIGINAL
-      const enrichedProducts = prodData.map(p => ({
-        ...p,
-        stock_local: stockMapLocal[p.id] || 0,
-        price_sale: priceMapLocal[p.id] || 0 // Si no hay en product_prices, queda en 0
-      })) || [];
+      const enrichedProducts = prodData.map(p => {
+        const stock = stockMapLocal[p.id] || { disponible: 0, cuarentena: 0 };
+
+        return {
+          ...p,
+          stock_disponible: stock.disponible,
+          stock_cuarentena: stock.cuarentena,
+          stock_local: stock.disponible,
+          price_sale: priceMapLocal[p.id] || 0 // Si no hay en product_prices, queda en 0
+        };
+      }) || [];
 
       console.log("Primer producto cargado (POS Local):", enrichedProducts[0]);
 
       setProducts(enrichedProducts);
       setPrescriptions(preData);
-      setStockMap(stockMapLocal);
+      setActiveSession(currentSession);
     } catch (err) {
       console.error("Error cargando POS:", err);
     } finally {
@@ -96,6 +118,11 @@ export default function PuntoDeVenta() {
 
   // ── LÓGICA DEL CARRITO ──────────────────────────────────────────────────
   const tryAddToCart = (product) => {
+    const existing = cart.find(item => item.id === product.id);
+    const requestedQuantity = Number(existing?.quantity || 0) + 1;
+
+    if (!canSellQuantity(product, requestedQuantity)) return;
+
     const condition = (product.sale_condition || product.prescription_type || 'VD').toUpperCase();
     if (condition === 'VD' || condition === 'VENTA_LIBRE') { addToCart(product); return; }
     if (condition === 'R' || condition === 'RECETA_SIMPLE') { setValidationModal({ isOpen: true, type: 'R', product }); setModalInput(''); return; }
@@ -109,6 +136,16 @@ export default function PuntoDeVenta() {
   // Helper: precio seguro con fallback
   const safePrice = (p) => Number(p?.price_sale ?? p?.unit_price ?? p?.price ?? 0);
 
+  const showInsufficientStockAlert = () => {
+    alert('Stock disponible insuficiente. No se puede vender stock en cuarentena.');
+  };
+
+  const canSellQuantity = (product, requestedQuantity) => {
+    if (Number(requestedQuantity || 0) <= Number(product?.stock_disponible || 0)) return true;
+    showInsufficientStockAlert();
+    return false;
+  };
+
   const addToCart = (product, metadata = {}) => {
     // Bloqueo de venta si no hay precio definido para este local
     if (Number(product.price_sale) <= 0) {
@@ -117,8 +154,16 @@ export default function PuntoDeVenta() {
     }
 
     const existing = cart.find(item => item.id === product.id);
+    const requestedQuantity = Number(existing?.quantity || 0) + 1;
+    const availableStock = Number(product.stock_disponible || 0);
+
+    if (requestedQuantity > availableStock) {
+      showInsufficientStockAlert();
+      return;
+    }
+
     if (existing) {
-      setCart(cart.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item));
+      setCart(cart.map(item => item.id === product.id ? { ...item, quantity: Number(item.quantity || 0) + 1 } : item));
     } else {
       setCart(prev => [...prev, {
         ...product,
@@ -136,6 +181,10 @@ export default function PuntoDeVenta() {
 
   const setQuantity = (id, val) => {
     const qty = Math.max(1, parseInt(val) || 1);
+    const product = cart.find(item => item.id === id);
+
+    if (!canSellQuantity(product, qty)) return;
+
     setCart(cart.map(item => item.id === id ? { ...item, quantity: qty } : item));
   };
 
@@ -147,6 +196,46 @@ export default function PuntoDeVenta() {
   const handleCheckout = () => {
     if (cart.length === 0 || isProcessingSale) return;
     setShowCheckoutModal(true);
+  };
+
+  const handleQuickCashOut = async () => {
+    if (!activeWarehouse?.id) {
+      alert('Debes seleccionar una sucursal antes de registrar retiros de caja.');
+      return;
+    }
+    if (Number(quickCashModal.amount || 0) <= 0) {
+      alert('Debes ingresar un monto mayor a cero.');
+      return;
+    }
+    if (!quickCashModal.reason.trim()) {
+      alert('Debes indicar la justificación del retiro.');
+      return;
+    }
+
+    setIsProcessingSale(true);
+    try {
+      const { data: openSession, error: sessionError } = await fetchOpenPosSession(activeWarehouse.id);
+      if (sessionError) throw sessionError;
+      if (!openSession?.id) {
+        throw new Error('Debes abrir tu caja en el módulo de Control de Caja antes de registrar retiros.');
+      }
+
+      const { error: movementError } = await createCashMovement({
+        sessionId: openSession.id,
+        movementType: 'OUT',
+        amount: Number(quickCashModal.amount || 0),
+        reason: quickCashModal.reason.trim(),
+      });
+      if (movementError) throw movementError;
+
+      setQuickCashModal({ open: false, amount: '', reason: '' });
+      alert('Retiro de dinero registrado en la caja activa.');
+    } catch (error) {
+      console.error('Error registrando retiro rápido:', error);
+      alert(`No se pudo registrar el retiro: ${error.message || error}`);
+    } finally {
+      setIsProcessingSale(false);
+    }
   };
 
   const confirmSale = async (modalSaleHeader) => {
@@ -219,6 +308,18 @@ export default function PuntoDeVenta() {
           </div>
         </div>
         <div className="flex items-center gap-6">
+          <div className={`hidden lg:flex items-center gap-2 rounded-xl border px-4 py-2 text-[11px] font-black uppercase ${activeSession ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
+            <Wallet size={14} />
+            {activeSession ? `Caja abierta · ${activeSession.operator?.full_name || 'Operador sin nombre'}` : 'Caja cerrada'}
+          </div>
+          <button
+            type="button"
+            onClick={() => setQuickCashModal({ open: true, amount: '', reason: '' })}
+            className="hidden md:inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-[11px] font-black uppercase text-white hover:bg-white/15 transition-colors"
+          >
+            <ArrowUpCircle size={16} />
+            Retiro Rapido
+          </button>
           <div className="hidden md:flex items-center gap-3 text-[10px] text-slate-500 font-bold">
             <span className="bg-slate-800 px-2 py-1 rounded font-mono">F1</span> Buscar
             <span className="bg-slate-800 px-2 py-1 rounded font-mono">F2</span> Cobrar
@@ -355,7 +456,7 @@ export default function PuntoDeVenta() {
                     <tr>
                       <th className="px-6 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">Producto / DCI</th>
                       <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Cond.</th>
-                      <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Stock Real</th>
+                      <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Disponible</th>
                       <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">P. Venta</th>
                       <th className="px-4 py-3 w-16"></th>
                     </tr>
@@ -373,9 +474,16 @@ export default function PuntoDeVenta() {
                           </span>
                         </td>
                         <td className="px-4 py-4 text-center">
-                          <span className={`font-mono font-bold ${p.stock_local <= 5 ? 'text-red-500' : 'text-slate-600'}`}>
-                            {p.stock_local}
-                          </span>
+                          <div className="flex flex-col items-center gap-1">
+                            <span className={`font-mono font-bold ${p.stock_disponible <= 5 ? 'text-red-500' : 'text-slate-600'}`}>
+                              Disponible: {p.stock_disponible}
+                            </span>
+                            {p.stock_cuarentena > 0 && (
+                              <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[10px] font-black text-orange-700">
+                                ⚠️ {p.stock_cuarentena} en Cuarentena
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4 text-right font-black">
                           <span className={Number(p.price_sale) <= 0 ? 'text-red-400 italic text-[10px]' : 'text-slate-700'}>
@@ -471,6 +579,55 @@ export default function PuntoDeVenta() {
           onConfirm={confirmSale}
           isProcessing={isProcessingSale}
         />
+      )}
+
+      {quickCashModal.open && (
+        <div className="fixed inset-0 z-[140] bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-xl bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+            <div className="bg-gray-50/50 px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-4">
+              <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Retiro Rápido de Dinero</p>
+              <button type="button" onClick={() => setQuickCashModal({ open: false, amount: '', reason: '' })} className="rounded-lg border border-gray-300 px-3 py-2 text-[11px] font-black uppercase text-gray-600">Cerrar</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="bg-gray-50/50 px-4 py-3 border-b border-gray-200">
+                  <p className="text-[11px] font-black text-gray-500 uppercase">Monto a Retirar</p>
+                </div>
+                <div className="p-4">
+                  <input
+                    type="number"
+                    min="0"
+                    value={quickCashModal.amount}
+                    onChange={(e) => setQuickCashModal((current) => ({ ...current, amount: e.target.value }))}
+                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073]"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="bg-gray-50/50 px-4 py-3 border-b border-gray-200">
+                  <p className="text-[11px] font-black text-gray-500 uppercase">Justificación</p>
+                </div>
+                <div className="p-4">
+                  <textarea
+                    value={quickCashModal.reason}
+                    onChange={(e) => setQuickCashModal((current) => ({ ...current, reason: e.target.value }))}
+                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] min-h-[110px]"
+                    placeholder="Ej: retiro a bóveda, pago menor, seguridad"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={() => setQuickCashModal({ open: false, amount: '', reason: '' })} className="rounded-xl border border-gray-300 px-4 py-2.5 text-[11px] font-black uppercase text-gray-700">Cancelar</button>
+                <button type="button" onClick={handleQuickCashOut} disabled={isProcessingSale} className="rounded-xl bg-[#4C3073] px-4 py-2.5 text-[11px] font-black uppercase text-white disabled:opacity-40">
+                  {isProcessingSale ? 'Guardando...' : 'Registrar Retiro'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -197,10 +197,30 @@ export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) =>
   const userId = await getCurrentUserId();
   if (!userId) throw new Error("Sesión expirada o usuario no autenticado.");
 
+  const { data: openSession, error: openSessionError } = await schema
+    .from('pos_sessions')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .eq('warehouse_id', warehouseId)
+    .eq('status', 'OPEN')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (openSessionError) {
+    throw openSessionError;
+  }
+
+  if (!openSession?.id) {
+    throw new Error('Debes abrir tu caja en el módulo de Control de Caja antes de poder vender');
+  }
+
   // 1. Creación de la Cabecera (Payload Estricto de 6 propiedades)
   const salePayload = {
     company_id: companyId,
     user_id: userId,
+    session_id: openSession.id,
     total_amount: Number(saleHeader.total_amount),
     payment_method: saleHeader.payment_method || 'CASH',
     document_number: saleHeader.document_number || `TICKET-${Date.now()}`,
@@ -224,21 +244,52 @@ export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) =>
     const productId = item.id || item.product_id;
     const priceSale = item.price_sale || item.unit_price || 0;
 
-    // Búsqueda FEFO: Consulta inventory_batches, inner join con location para filtrar bodega
-    const { data: batches, error: batchesErr } = await schema
+    // Búsqueda FEFO: solo stock vendible del local, bloqueando Cuarentena desde POS.
+    let { data: batches, error: batchesErr } = await schema
       .from('inventory_batches')
-      .select('*, location:location_id!inner(*)')
+      .select('*, location:location_id!inner(id, name, location_type, warehouse_id)')
       .eq('product_id', productId)
       .eq('location.warehouse_id', warehouseId)
+      .neq('location.location_type', 'QUARANTINE')
       .gt('current_quantity', 0)
       .order('expiry_date', { ascending: true });
 
+    if (batchesErr) {
+      console.warn('[POS] Filtro por location_type en join falló; aplicando exclusión de cuarentena en memoria.', batchesErr);
+      const fallback = await schema
+        .from('inventory_batches')
+        .select('*, location:location_id!inner(id, name, location_type, warehouse_id)')
+        .eq('product_id', productId)
+        .eq('location.warehouse_id', warehouseId)
+        .gt('current_quantity', 0)
+        .order('expiry_date', { ascending: true });
+
+      batches = fallback.data;
+      batchesErr = fallback.error;
+    }
+
     if (batchesErr) throw batchesErr;
+
+    const validBatches = (batches || [])
+      .filter(batch => {
+        const locationType = batch.location?.location_type?.toUpperCase();
+        const locationName = batch.location?.name?.toLowerCase() || '';
+        return locationType !== 'QUARANTINE' && !locationName.includes('cuarentena');
+      })
+      .sort((a, b) => {
+        const isASales = a.location?.location_type?.toUpperCase() === 'SALES' || a.location?.name?.toLowerCase().includes('venta');
+        const isBSales = b.location?.location_type?.toUpperCase() === 'SALES' || b.location?.name?.toLowerCase().includes('venta');
+
+        if (isASales && !isBSales) return -1;
+        if (!isASales && isBSales) return 1;
+
+        return new Date(a.expiry_date) - new Date(b.expiry_date);
+      });
 
     // 3. Bucle Destripador de Lotes
     let remainingToFulfill = item.quantity;
 
-    for (const batch of batches) {
+    for (const batch of validBatches) {
       if (remainingToFulfill <= 0) break;
 
       const qtyToDeduct = Math.min(remainingToFulfill, batch.current_quantity);
@@ -313,6 +364,274 @@ export const findPendingPrescription = async (folio) => {
 
   if (error) return null;
   return data;
+};
+
+// --- CONTROL DE CAJA / POS SESSIONS ---
+
+export const fetchOpenPosSession = async (warehouseId) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+
+  if (!companyId || !userId || !warehouseId) {
+    return { data: null, error: new Error('No se pudo resolver compania, usuario o sucursal.') };
+  }
+
+  return await schema
+    .from('pos_sessions')
+    .select('*, operator:operator_id(id, full_name, is_active)')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .eq('warehouse_id', warehouseId)
+    .eq('status', 'OPEN')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+};
+
+export const openPosSession = async ({ warehouseId, openingBalance, operatorId }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+
+  if (!companyId || !userId || !warehouseId) {
+    return { data: null, error: new Error('No se pudo resolver compania, usuario o sucursal.') };
+  }
+
+  return await schema
+    .from('pos_sessions')
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      warehouse_id: warehouseId,
+      operator_id: operatorId,
+      start_time: new Date().toISOString(),
+      opening_balance: Number(openingBalance || 0),
+      status: 'OPEN',
+    })
+    .select()
+    .single();
+};
+
+export const fetchPosSessionSummary = async (session) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !session?.id) {
+    return { data: null, error: new Error('No se pudo resolver compania o sesion.') };
+  }
+
+  const cashSalesResult = await schema
+    .from('sales')
+    .select('id, total_amount, payment_method, created_at, document_number, patient_id')
+    .eq('company_id', companyId)
+    .eq('session_id', session.id)
+    .eq('payment_method', 'CASH')
+    .order('created_at', { ascending: false });
+  if (cashSalesResult.error) return { data: null, error: cashSalesResult.error };
+
+  const movementsResult = await schema
+    .from('cash_movements')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('session_id', session.id)
+    .order('created_at', { ascending: false });
+
+  if (movementsResult.error) return { data: null, error: movementsResult.error };
+
+  const cashSales = (cashSalesResult.data || []).reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0);
+  const movements = movementsResult.data || [];
+  const cashEntries = movements
+    .filter((movement) => movement.movement_type === 'IN')
+    .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+  const cashOutflows = movements
+    .filter((movement) => movement.movement_type === 'OUT')
+    .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+
+  return {
+    data: {
+      cashSales,
+      cashEntries,
+      cashOutflows,
+      expectedCash: Number(session.opening_balance || 0) + cashSales + cashEntries - cashOutflows,
+      sales: cashSalesResult.data || [],
+      movements,
+    },
+    error: null,
+  };
+};
+
+export const fetchClosedPosSessions = async (warehouseId, limit = 10) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+
+  if (!companyId || !userId || !warehouseId) {
+    return { data: [], error: new Error('No se pudo resolver compania, usuario o sucursal.') };
+  }
+
+  const { data: sessions, error: sessionsError } = await schema
+    .from('pos_sessions')
+    .select('*, operator:operator_id(id, full_name, is_active)')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .eq('warehouse_id', warehouseId)
+    .eq('status', 'CLOSED')
+    .order('end_time', { ascending: false })
+    .limit(limit);
+
+  if (sessionsError) return { data: [], error: sessionsError };
+
+  const summarizedSessions = await Promise.all((sessions || []).map(async (session) => {
+    const { data: sessionSummary, error: summaryError } = await fetchPosSessionSummary(session);
+    if (summaryError) {
+      return {
+        ...session,
+        summaryError: summaryError.message || 'No se pudo calcular resumen del turno',
+      };
+    }
+
+    return {
+      ...session,
+      summary: sessionSummary,
+    };
+  }));
+
+  return { data: summarizedSessions, error: null };
+};
+
+export const createCashMovement = async ({ sessionId, movementType, amount, reason }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+
+  if (!companyId || !userId || !sessionId) {
+    return { data: null, error: new Error('No se pudo resolver compania, usuario o sesion.') };
+  }
+
+  return await schema
+    .from('cash_movements')
+    .insert({
+      company_id: companyId,
+      session_id: sessionId,
+      user_id: userId,
+      movement_type: movementType,
+      amount: Number(amount || 0),
+      reason,
+    })
+    .select()
+    .single();
+};
+
+export const closePosSession = async ({ sessionId, closingBalance, difference }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !sessionId) {
+    return { data: null, error: new Error('No se pudo resolver compania o sesion.') };
+  }
+
+  return await schema
+    .from('pos_sessions')
+    .update({
+      status: 'CLOSED',
+      closing_balance: Number(closingBalance || 0),
+      difference: Number(difference || 0),
+      end_time: new Date().toISOString(),
+    })
+    .eq('company_id', companyId)
+    .eq('id', sessionId)
+    .select()
+    .single();
+};
+
+export const fetchPosOperators = async (warehouseId) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId) {
+    return { data: [], error: new Error('No se pudo resolver compania o sucursal.') };
+  }
+
+  return await schema
+    .from('pos_operators')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('warehouse_id', warehouseId)
+    .order('full_name');
+};
+
+export const createPosOperator = async ({ warehouseId, fullName, pinCode }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId) {
+    return { data: null, error: new Error('No se pudo resolver compania o sucursal.') };
+  }
+
+  const result = await schema.rpc('create_pos_operator', {
+    p_company_id: companyId,
+    p_warehouse_id: warehouseId,
+    p_full_name: fullName,
+    p_pin_code: pinCode,
+  });
+
+  if (result.error) return result;
+
+  const normalizedData = Array.isArray(result.data) ? result.data[0] : result.data;
+  return { data: normalizedData || null, error: null };
+};
+
+export const updatePosOperator = async ({ operatorId, fullName, isActive }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !operatorId) {
+    return { data: null, error: new Error('No se pudo resolver compania u operador.') };
+  }
+
+  return await schema
+    .from('pos_operators')
+    .update({
+      full_name: fullName,
+      is_active: isActive,
+    })
+    .eq('company_id', companyId)
+    .eq('id', operatorId)
+    .select()
+    .single();
+};
+
+export const resetPosOperatorPin = async ({ operatorId, warehouseId, pinCode }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId || !operatorId) {
+    return { data: false, error: new Error('No se pudo resolver compania, sucursal u operador.') };
+  }
+
+  return await schema.rpc('reset_pos_operator_pin', {
+    p_operator_id: operatorId,
+    p_company_id: companyId,
+    p_warehouse_id: warehouseId,
+    p_pin_code: pinCode,
+  });
+};
+
+export const verifyPosOperatorPin = async ({ operatorId, warehouseId, pinCode }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId || !operatorId) {
+    return { data: false, error: new Error('No se pudo resolver compania, sucursal u operador.') };
+  }
+
+  return await schema.rpc('verify_pos_operator_pin', {
+    p_operator_id: operatorId,
+    p_company_id: companyId,
+    p_warehouse_id: warehouseId,
+    p_pin_code: pinCode,
+  });
 };
 
 // --- ÓRDENES DE COMPRA (LOGÍSTICA) ---
