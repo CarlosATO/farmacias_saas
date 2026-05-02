@@ -41,6 +41,8 @@ export default function ControlCaja() {
   const [movementModal, setMovementModal] = useState(initialMovementModal);
   const [closingModal, setClosingModal] = useState(initialClosingModal);
   const [openingModal, setOpeningModal] = useState({ open: false, terminalId: null });
+  const [closedSessions, setClosedSessions] = useState([]);
+  const [summary, setSummary] = useState(null);
 
   const loadData = async () => {
     if (!activeWarehouse?.id) {
@@ -182,7 +184,7 @@ export default function ControlCaja() {
       alert('La sesión no tiene operador POS asociado y no puede cerrarse de forma segura.');
       return;
     }
-    if (!/^\d{4}$/.test(closingModal.pinCode.test?.() || closingModal.pinCode.trim())) {
+    if (!/^\d{4}$/.test(closingModal.pinCode.trim())) {
       alert('Debes ingresar el PIN de 4 dígitos del operador para cerrar el turno.');
       return;
     }
@@ -513,7 +515,6 @@ export default function ControlCaja() {
           </div>
         </ModalFrame>
       )}
-      </div>
 
       {movementModal.open && (
         <ModalFrame title={movementModal.movementType === 'IN' ? 'Ingresar Dinero a Caja' : 'Retirar Dinero de Caja'} onClose={() => setMovementModal(initialMovementModal)}>

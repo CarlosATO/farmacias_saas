@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ShoppingCart, Search, Plus, Trash2, ShieldAlert, FlaskConical,
-  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet
+  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet, Calculator
 } from 'lucide-react';
 import {
   fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchPricesByWarehouse,
