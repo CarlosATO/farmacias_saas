@@ -25,6 +25,8 @@ export default function PuntoDeVenta() {
   const [isProcessingSale, setIsProcessingSale] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [quickCashModal, setQuickCashModal] = useState({ open: false, amount: '', reason: '' });
+  const [activeSession, setActiveSession] = useState(null);
+  const [sessionSummary, setSessionSummary] = useState(null);
   const [closingModal, setClosingModal] = useState({ open: false, closingBalance: '', pinCode: '' });
   const [terminalId, setTerminalId] = useState(localStorage.getItem('pharmacy_terminal_id'));
   const [terminals, setTerminals] = useState([]);
