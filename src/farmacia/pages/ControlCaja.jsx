@@ -284,115 +284,168 @@ export default function ControlCaja() {
   return (
     <div className="p-6 md:p-8 bg-[#f8f9fa] min-h-full">
       <div className="max-w-7xl mx-auto space-y-6">
-        <div className="bg-white border border-gray-200 rounded-2xl p-6">
-          <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Ventas / Control de Caja</p>
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Apertura y Cierre de Turnos</h1>
-              <p className="text-sm text-gray-500 mt-2">Modulo financiero para control de sesiones de caja por sucursal y cajero.</p>
-            </div>
-            <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3 text-right">
-              <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Sucursal</p>
-              <p className="text-sm font-black text-[#4C3073] uppercase">{activeWarehouse?.name || 'Sin sucursal'}</p>
-            </div>
-            <button
-              onClick={() => setTerminalManagementModal(true)}
-              className="rounded-xl border border-gray-300 px-4 py-3 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              Gestionar Cajas Físicas
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {terminals.map((terminal) => {
-            const terminalSession = sessions.find(s => s.terminal_id === terminal.id && (s.status === 'OPEN' || s.status === 'PENDING'));
-            const status = terminalSession ? terminalSession.status : 'CLOSED';
-            
-            return (
-              <div 
-                key={terminal.id} 
-                className={`bg-white border rounded-2xl p-6 transition-all shadow-sm hover:shadow-md ${
-                  selectedSessionId === terminalSession?.id ? 'ring-2 ring-[#4C3073] border-[#4C3073]' : 'border-gray-200'
-                }`}
-              >
-                <div className="flex items-start justify-between mb-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center border ${
-                    status === 'OPEN' ? 'bg-green-50 border-green-100 text-green-600' :
-                    status === 'PENDING' ? 'bg-amber-50 border-amber-100 text-amber-600' :
-                    'bg-gray-50 border-gray-100 text-gray-400'
-                  }`}>
-                    <Calculator size={24} />
-                  </div>
-                  <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest border ${
-                    status === 'OPEN' ? 'bg-green-100 border-green-200 text-green-700' :
-                    status === 'PENDING' ? 'bg-amber-100 border-amber-200 text-amber-700' :
-                    'bg-gray-100 border-gray-200 text-gray-500'
-                  }`}>
-                    {status === 'OPEN' ? 'Abierta' : status === 'PENDING' ? 'Pendiente' : 'Cerrada'}
-                  </span>
+        {!selectedSessionId ? (
+          <>
+            <div className="bg-white border border-gray-200 rounded-2xl p-6">
+              <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Ventas / Control de Caja</p>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Apertura y Cierre de Turnos</h1>
+                  <p className="text-sm text-gray-500 mt-2">Modulo financiero para control de sesiones de caja por sucursal y cajero.</p>
                 </div>
+                <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3 text-right">
+                  <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Sucursal</p>
+                  <p className="text-sm font-black text-[#4C3073] uppercase">{activeWarehouse?.name || 'Sin sucursal'}</p>
+                </div>
+                <button
+                  onClick={() => setTerminalManagementModal(true)}
+                  className="rounded-xl border border-gray-300 px-4 py-3 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Gestionar Cajas Físicas
+                </button>
+              </div>
+            </div>
 
-                <h3 className="text-lg font-black text-gray-900 uppercase truncate">{terminal.name}</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {terminals.map((terminal) => {
+                const terminalSession = sessions.find(s => s.terminal_id === terminal.id && (s.status === 'OPEN' || s.status === 'PENDING'));
+                const status = terminalSession ? terminalSession.status : 'CLOSED';
                 
-                {terminalSession ? (
-                  <div className="mt-4 space-y-3">
-                    <div className="flex justify-between items-center text-[11px] font-bold">
-                      <span className="text-gray-400 uppercase tracking-widest">Operador</span>
-                      <span className="text-gray-700 uppercase">{terminalSession.operator?.full_name}</span>
+                return (
+                  <div 
+                    key={terminal.id} 
+                    className={`bg-white border rounded-2xl p-6 transition-all shadow-sm hover:shadow-md ${
+                      selectedSessionId === terminalSession?.id ? 'ring-2 ring-[#4C3073] border-[#4C3073]' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center border ${
+                        status === 'OPEN' ? 'bg-green-50 border-green-100 text-green-600' :
+                        status === 'PENDING' ? 'bg-amber-50 border-amber-100 text-amber-600' :
+                        'bg-gray-50 border-gray-100 text-gray-400'
+                      }`}>
+                        <Calculator size={24} />
+                      </div>
+                      <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest border ${
+                        status === 'OPEN' ? 'bg-green-100 border-green-200 text-green-700' :
+                        status === 'PENDING' ? 'bg-amber-100 border-amber-200 text-amber-700' :
+                        'bg-gray-100 border-gray-200 text-gray-500'
+                      }`}>
+                        {status === 'OPEN' ? 'Abierta' : status === 'PENDING' ? 'Pendiente' : 'Cerrada'}
+                      </span>
                     </div>
-                    <div className="flex justify-between items-center text-[11px] font-bold">
-                      <span className="text-gray-400 uppercase tracking-widest">Efectivo Inicial</span>
-                      <span className="text-gray-900">{fmtCLP(terminalSession.opening_balance)}</span>
-                    </div>
+
+                    <h3 className="text-lg font-black text-gray-900 uppercase truncate">{terminal.name}</h3>
                     
-                    {status === 'OPEN' ? (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSessionId(terminalSession.id)}
-                        className="w-full mt-2 py-2.5 bg-[#4C3073] text-white rounded-xl text-[10px] font-black uppercase hover:bg-[#3f285f] transition-colors"
-                      >
-                        Monitorear Detalles
-                      </button>
+                    {terminalSession ? (
+                      <div className="mt-4 space-y-3">
+                        <div className="flex justify-between items-center text-[11px] font-bold">
+                          <span className="text-gray-400 uppercase tracking-widest">Operador</span>
+                          <span className="text-gray-700 uppercase">{terminalSession.operator?.full_name}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[11px] font-bold">
+                          <span className="text-gray-400 uppercase tracking-widest">Efectivo Inicial</span>
+                          <span className="text-gray-900">{fmtCLP(terminalSession.opening_balance)}</span>
+                        </div>
+                        
+                        {status === 'OPEN' ? (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedSessionId(terminalSession.id)}
+                            className="w-full mt-2 py-2.5 bg-[#4C3073] text-white rounded-xl text-[10px] font-black uppercase hover:bg-[#3f285f] transition-colors"
+                          >
+                            Monitorear Detalles
+                          </button>
+                        ) : (
+                          <div className="mt-4 p-3 bg-amber-50 border border-amber-100 rounded-xl">
+                            <p className="text-[10px] font-bold text-amber-700 leading-tight">Esperando activación por cajero con PIN físico.</p>
+                          </div>
+                        )}
+                      </div>
                     ) : (
-                      <div className="mt-4 p-3 bg-amber-50 border border-amber-100 rounded-xl">
-                        <p className="text-[10px] font-bold text-amber-700 leading-tight">Esperando activación por cajero con PIN físico.</p>
+                      <div className="mt-6">
+                        <button
+                          type="button"
+                          onClick={() => setOpeningModal({ open: true, terminalId: terminal.id })}
+                          className="w-full py-2.5 border border-gray-200 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-50 transition-colors"
+                        >
+                          Pre-Abrir Turno
+                        </button>
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div className="mt-6">
-                    <button
-                      type="button"
-                      onClick={() => setOpeningModal({ open: true, terminalId: terminal.id })}
-                      className="w-full py-2.5 border border-gray-200 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-50 transition-colors"
-                    >
-                      Pre-Abrir Turno
-                    </button>
+                );
+              })}
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden mt-8">
+              <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
+                <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Historial de Turnos Cerrados</p>
+              </div>
+              <div className="overflow-x-auto">
+                {closedSessions.length === 0 ? (
+                  <div className="py-14 text-center text-gray-400">
+                    <ShieldAlert size={28} className="mx-auto mb-3" />
+                    <p className="text-[11px] font-black uppercase tracking-widest">No hay cierres previos</p>
                   </div>
+                ) : (
+                  <table className="min-w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-gray-200 bg-white">
+                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Terminal</th>
+                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Operador</th>
+                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Cierre</th>
+                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Esperado</th>
+                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Diferencia</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {closedSessions.map((closedSession) => {
+                        const sessionExpectedCash = Number(closedSession.summary?.expectedCash || 0);
+                        const sessionDifference = Number(closedSession.difference || 0);
+                        return (
+                          <tr key={closedSession.id} className="hover:bg-gray-50">
+                            <td className="px-5 py-3 text-sm font-black text-gray-900 uppercase">{closedSession.terminal?.name || '—'}</td>
+                            <td className="px-5 py-3 text-sm font-bold text-gray-600 uppercase">{closedSession.operator?.full_name}</td>
+                            <td className="px-5 py-3 text-sm text-gray-500">{new Date(closedSession.end_time).toLocaleString('es-CL')}</td>
+                            <td className="px-5 py-3 text-sm font-black text-right text-blue-700">{fmtCLP(sessionExpectedCash)}</td>
+                            <td className={`px-5 py-3 text-sm font-black text-right ${sessionDifference === 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                              {fmtCLP(sessionDifference)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 )}
               </div>
-            );
-          })}
-        </div>
-
-        {activeSession && activeSession.status === 'OPEN' && (
-          <div className="space-y-6 pt-6 border-t border-gray-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => setSelectedSessionId(null)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  <ArrowLeft size={16} />
-                  Volver al Monitor de Cajas
-                </button>
-                <h2 className="text-xl font-black text-gray-900 uppercase">Detalle: {activeSession.terminal?.name}</h2>
-              </div>
-              <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-[10px] font-black uppercase border border-green-200">
-                Sesión Activa
-              </span>
             </div>
+          </>
+        ) : (
+          activeSession && activeSession.status === 'OPEN' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-6 py-4">
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={() => setSelectedSessionId(null)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    <ArrowLeft size={16} />
+                    Volver al Monitor
+                  </button>
+                  <div className="h-8 w-px bg-gray-200" />
+                  <h2 className="text-xl font-black text-gray-900 uppercase">Detalle: {activeSession.terminal?.name}</h2>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Operador Asignado</p>
+                    <p className="text-sm font-black text-[#4C3073] uppercase">{activeSession.operator?.full_name}</p>
+                  </div>
+                  <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-[10px] font-black uppercase border border-green-200">
+                    Sesión Activa
+                  </span>
+                </div>
+              </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <MetricCard label="Efectivo Inicial" value={fmtCLP(activeSession.opening_balance)} icon={Wallet} accent="text-[#4C3073]" />
@@ -528,52 +581,9 @@ export default function ControlCaja() {
                 )}
               </div>
             </div>
-            </div>
           </div>
         )}
-
-        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden mt-8">
-          <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
-            <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Historial de Turnos Cerrados</p>
-          </div>
-          <div className="overflow-x-auto">
-            {closedSessions.length === 0 ? (
-              <div className="py-14 text-center text-gray-400">
-                <ShieldAlert size={28} className="mx-auto mb-3" />
-                <p className="text-[11px] font-black uppercase tracking-widest">No hay cierres previos</p>
-              </div>
-            ) : (
-              <table className="min-w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-white">
-                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Terminal</th>
-                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Operador</th>
-                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Cierre</th>
-                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Esperado</th>
-                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Diferencia</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {closedSessions.map((closedSession) => {
-                    const sessionExpectedCash = Number(closedSession.summary?.expectedCash || 0);
-                    const sessionDifference = Number(closedSession.difference || 0);
-                    return (
-                      <tr key={closedSession.id} className="hover:bg-gray-50">
-                        <td className="px-5 py-3 text-sm font-black text-gray-900 uppercase">{closedSession.terminal?.name || '—'}</td>
-                        <td className="px-5 py-3 text-sm font-bold text-gray-600 uppercase">{closedSession.operator?.full_name}</td>
-                        <td className="px-5 py-3 text-sm text-gray-500">{new Date(closedSession.end_time).toLocaleString('es-CL')}</td>
-                        <td className="px-5 py-3 text-sm font-black text-right text-blue-700">{fmtCLP(sessionExpectedCash)}</td>
-                        <td className={`px-5 py-3 text-sm font-black text-right ${sessionDifference === 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                          {fmtCLP(sessionDifference)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+      </div>
       </div>
 
       {openingModal.open && (
