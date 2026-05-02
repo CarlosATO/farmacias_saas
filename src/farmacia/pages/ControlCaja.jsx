@@ -582,7 +582,9 @@ export default function ControlCaja() {
               </div>
             </div>
           </div>
-        )}
+          </div>
+        )
+      )}
       </div>
 
       {openingModal.open && (
