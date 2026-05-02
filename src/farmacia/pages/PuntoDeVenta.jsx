@@ -4,7 +4,8 @@ import {
   Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet
 } from 'lucide-react';
 import {
-  fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchOpenPosSession, fetchPricesByWarehouse
+  fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchOpenPosSession, fetchPricesByWarehouse,
+  fetchPosSessionSummary, verifyPosOperatorPin, closePosSession
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
@@ -24,6 +25,8 @@ export default function PuntoDeVenta() {
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [quickCashModal, setQuickCashModal] = useState({ open: false, amount: '', reason: '' });
   const [activeSession, setActiveSession] = useState(null);
+  const [sessionSummary, setSessionSummary] = useState(null);
+  const [closingModal, setClosingModal] = useState({ open: false, closingBalance: '', pinCode: '' });
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
 
@@ -89,6 +92,13 @@ export default function PuntoDeVenta() {
       setProducts(enrichedProducts);
       setPrescriptions(preData);
       setActiveSession(currentSession);
+
+      if (currentSession) {
+        const { data: summaryData } = await fetchPosSessionSummary(currentSession);
+        setSessionSummary(summaryData);
+      } else {
+        setSessionSummary(null);
+      }
     } catch (err) {
       console.error("Error cargando POS:", err);
     } finally {
@@ -230,9 +240,64 @@ export default function PuntoDeVenta() {
 
       setQuickCashModal({ open: false, amount: '', reason: '' });
       alert('Retiro de dinero registrado en la caja activa.');
+      loadInitialData(); // Recargar para actualizar esperado
     } catch (error) {
       console.error('Error registrando retiro rápido:', error);
       alert(`No se pudo registrar el retiro: ${error.message || error}`);
+    } finally {
+      setIsProcessingSale(false);
+    }
+  };
+
+  const handleCloseSession = async () => {
+    if (!activeSession?.id) return;
+
+    const closingBalance = Number(closingModal.closingBalance || 0);
+    const expectedCash = Number(sessionSummary?.expectedCash || 0);
+
+    if (closingBalance < 0) {
+      alert('El efectivo fisico no puede ser negativo.');
+      return;
+    }
+    if (!activeSession.operator?.id) {
+      alert('La sesión no tiene operador POS asociado y no puede cerrarse de forma segura.');
+      return;
+    }
+    if (!/^\d{4}$/.test(closingModal.pinCode.trim())) {
+      alert('Debes ingresar el PIN de 4 dígitos del operador para cerrar el turno.');
+      return;
+    }
+    const difference = closingBalance - expectedCash;
+
+    setIsProcessingSale(true);
+    try {
+      const { data: pinValid, error: pinError } = await verifyPosOperatorPin({
+        operatorId: activeSession.operator.id,
+        warehouseId: activeWarehouse.id,
+        pinCode: closingModal.pinCode.trim(),
+      });
+      if (pinError) throw pinError;
+      if (!pinValid) {
+        alert('PIN de operador inválido. No se puede cerrar el turno.');
+        return;
+      }
+
+      const { error } = await closePosSession({
+        sessionId: activeSession.id,
+        closingBalance,
+        difference,
+      });
+      if (error) throw error;
+
+      setClosingModal({ open: false, closingBalance: '', pinCode: '' });
+      alert(difference === 0 
+        ? 'Turno cerrado sin diferencias.' 
+        : `Turno cerrado con ${difference > 0 ? 'sobrante' : 'faltante'} de ${fmtCLP(Math.abs(difference))}.`
+      );
+      loadInitialData();
+    } catch (error) {
+      console.error('Error cerrando turno:', error);
+      alert(`No se pudo cerrar el turno: ${error.message || error}`);
     } finally {
       setIsProcessingSale(false);
     }
@@ -320,6 +385,16 @@ export default function PuntoDeVenta() {
             <ArrowUpCircle size={16} />
             Retiro Rapido
           </button>
+          {activeSession && (
+            <button
+              type="button"
+              onClick={() => setClosingModal({ open: true, closingBalance: '', pinCode: '' })}
+              className="hidden lg:inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-[11px] font-black uppercase text-white hover:bg-red-700 transition-colors shadow-lg shadow-red-900/20"
+            >
+              <ShieldAlert size={16} />
+              Cerrar Turno
+            </button>
+          )}
           <div className="hidden md:flex items-center gap-3 text-[10px] text-slate-500 font-bold">
             <span className="bg-slate-800 px-2 py-1 rounded font-mono">F1</span> Buscar
             <span className="bg-slate-800 px-2 py-1 rounded font-mono">F2</span> Cobrar
@@ -623,6 +698,68 @@ export default function PuntoDeVenta() {
                 <button type="button" onClick={() => setQuickCashModal({ open: false, amount: '', reason: '' })} className="rounded-xl border border-gray-300 px-4 py-2.5 text-[11px] font-black uppercase text-gray-700">Cancelar</button>
                 <button type="button" onClick={handleQuickCashOut} disabled={isProcessingSale} className="rounded-xl bg-[#4C3073] px-4 py-2.5 text-[11px] font-black uppercase text-white disabled:opacity-40">
                   {isProcessingSale ? 'Guardando...' : 'Registrar Retiro'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {closingModal.open && (
+        <div className="fixed inset-0 z-[140] bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden">
+            <div className="bg-gray-50/50 px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-4">
+              <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Cerrar Turno (Arqueo)</p>
+              <button type="button" onClick={() => setClosingModal({ open: false, closingBalance: '', pinCode: '' })} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-5">
+              <div className="rounded-xl border border-purple-100 bg-purple-50/50 p-4">
+                <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-1">Efectivo Esperado en Gaveta</p>
+                <p className="text-2xl font-black text-[#4C3073]">{fmtCLP(sessionSummary?.expectedCash)}</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Efectivo Físico Contado</label>
+                <input
+                  type="number"
+                  min="0"
+                  autoFocus
+                  value={closingModal.closingBalance}
+                  onChange={(e) => setClosingModal((current) => ({ ...current, closingBalance: e.target.value }))}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3.5 text-lg font-black outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all"
+                  placeholder="0"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">PIN de Seguridad Operador</label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  value={closingModal.pinCode}
+                  onChange={(e) => setClosingModal((current) => ({ ...current, pinCode: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3.5 text-lg font-black tracking-[0.5em] outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all"
+                  placeholder="••••"
+                />
+              </div>
+
+              <div className="flex flex-col gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleCloseSession}
+                  disabled={isProcessingSale}
+                  className="w-full rounded-xl bg-red-600 py-4 text-sm font-black uppercase text-white shadow-lg shadow-red-200 hover:bg-red-700 active:scale-[0.98] transition-all disabled:opacity-40"
+                >
+                  {isProcessingSale ? <Loader2 size={20} className="animate-spin mx-auto" /> : 'Confirmar Cierre de Turno'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClosingModal({ open: false, closingBalance: '', pinCode: '' })}
+                  className="w-full py-2 text-[11px] font-black uppercase text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  Cancelar
                 </button>
               </div>
             </div>
