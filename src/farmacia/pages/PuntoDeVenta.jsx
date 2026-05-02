@@ -4,8 +4,9 @@ import {
   Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet
 } from 'lucide-react';
 import {
-  fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchOpenPosSession, fetchPricesByWarehouse,
-  fetchPosSessionSummary, verifyPosOperatorPin, closePosSession
+  fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchPricesByWarehouse,
+  fetchPosSessionSummary, verifyPosOperatorPin, closePosSession,
+  fetchPosTerminals, fetchSessionByTerminal, activateSession
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
@@ -24,15 +25,27 @@ export default function PuntoDeVenta() {
   const [isProcessingSale, setIsProcessingSale] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [quickCashModal, setQuickCashModal] = useState({ open: false, amount: '', reason: '' });
-  const [activeSession, setActiveSession] = useState(null);
-  const [sessionSummary, setSessionSummary] = useState(null);
   const [closingModal, setClosingModal] = useState({ open: false, closingBalance: '', pinCode: '' });
+  const [terminalId, setTerminalId] = useState(localStorage.getItem('pharmacy_terminal_id'));
+  const [terminals, setTerminals] = useState([]);
+  const [isTerminalSelectionOpen, setIsTerminalSelectionOpen] = useState(false);
+  const [activationModal, setActivationModal] = useState({ open: false, pinCode: '' });
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
 
   // ── CARGA DE DATOS ──────────────────────────────────────────────────────
   const loadInitialData = async () => {
     if (!activeWarehouse?.id) return;
+    
+    // Si no hay terminalID, cargamos la lista para seleccion
+    if (!terminalId) {
+      const { data } = await fetchPosTerminals(activeWarehouse.id);
+      setTerminals(data || []);
+      setIsTerminalSelectionOpen(true);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       const [prodRes, preRes, stockRes, priceRes, sessionRes] = await Promise.all([
@@ -40,7 +53,7 @@ export default function PuntoDeVenta() {
         fetchPrescriptions(),
         fetchInventoryStock(activeWarehouse.id),
         fetchPricesByWarehouse(activeWarehouse.id),
-        fetchOpenPosSession(activeWarehouse.id),
+        fetchSessionByTerminal(terminalId),
       ]);
 
       const prodData = prodRes.data || [];
@@ -49,53 +62,43 @@ export default function PuntoDeVenta() {
       const preData = preRes.data?.filter(p => p.status === 'PENDING') || [];
       const currentSession = sessionRes.data || null;
 
-      // 1. Armar mapa de stock vendible vs cuarentena por producto
+      // ... existing stock and price logic ...
       const stockMapLocal = {};
       stockData.forEach(batch => {
         const qty = Number(batch.current_quantity || 0);
         const locationType = batch.location?.location_type?.toUpperCase();
         const locationName = batch.location?.name?.toLowerCase() || '';
         const isQuarantine = locationType === 'QUARANTINE' || locationName.includes('cuarentena');
-
-        if (!stockMapLocal[batch.product_id]) {
-          stockMapLocal[batch.product_id] = { disponible: 0, cuarentena: 0 };
-        }
-
-        if (isQuarantine) {
-          stockMapLocal[batch.product_id].cuarentena += qty;
-        } else {
-          stockMapLocal[batch.product_id].disponible += qty;
-        }
+        if (!stockMapLocal[batch.product_id]) stockMapLocal[batch.product_id] = { disponible: 0, cuarentena: 0 };
+        if (isQuarantine) stockMapLocal[batch.product_id].cuarentena += qty;
+        else stockMapLocal[batch.product_id].disponible += qty;
       });
 
-      // 2. Armar mapa de precios locales
       const priceMapLocal = {};
-      priceData.forEach(item => {
-        priceMapLocal[item.product_id] = Number(item.price_sale);
-      });
+      priceData.forEach(item => { priceMapLocal[item.product_id] = Number(item.price_sale); });
 
-      // 3. Enriquecer el catálogo ORIGINAL
       const enrichedProducts = prodData.map(p => {
         const stock = stockMapLocal[p.id] || { disponible: 0, cuarentena: 0 };
-
         return {
           ...p,
           stock_disponible: stock.disponible,
           stock_cuarentena: stock.cuarentena,
           stock_local: stock.disponible,
-          price_sale: priceMapLocal[p.id] || 0 // Si no hay en product_prices, queda en 0
+          price_sale: priceMapLocal[p.id] || 0
         };
-      }) || [];
-
-      console.log("Primer producto cargado (POS Local):", enrichedProducts[0]);
+      });
 
       setProducts(enrichedProducts);
       setPrescriptions(preData);
       setActiveSession(currentSession);
 
       if (currentSession) {
-        const { data: summaryData } = await fetchPosSessionSummary(currentSession);
-        setSessionSummary(summaryData);
+        if (currentSession.status === 'PENDING') {
+          setActivationModal({ open: true, pinCode: '' });
+        } else {
+          const { data: summaryData } = await fetchPosSessionSummary(currentSession);
+          setSessionSummary(summaryData);
+        }
       } else {
         setSessionSummary(null);
       }
@@ -103,6 +106,32 @@ export default function PuntoDeVenta() {
       console.error("Error cargando POS:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSelectTerminal = (id) => {
+    localStorage.setItem('pharmacy_terminal_id', id);
+    setTerminalId(id);
+    setIsTerminalSelectionOpen(false);
+  };
+
+  const handleActivateSession = async () => {
+    if (!activeSession || !activationModal.pinCode) return;
+    setIsProcessingSale(true);
+    try {
+      const { data, error } = await activateSession({
+        sessionId: activeSession.id,
+        operatorId: activeSession.operator_id,
+        warehouseId: activeWarehouse.id,
+        pinCode: activationModal.pinCode
+      });
+      if (error) throw error;
+      setActivationModal({ open: false, pinCode: '' });
+      loadInitialData();
+    } catch (error) {
+      alert(`PIN incorrecto: ${error.message}`);
+    } finally {
+      setIsProcessingSale(false);
     }
   };
 
@@ -224,14 +253,8 @@ export default function PuntoDeVenta() {
 
     setIsProcessingSale(true);
     try {
-      const { data: openSession, error: sessionError } = await fetchOpenPosSession(activeWarehouse.id);
-      if (sessionError) throw sessionError;
-      if (!openSession?.id) {
-        throw new Error('Debes abrir tu caja en el módulo de Control de Caja antes de registrar retiros.');
-      }
-
       const { error: movementError } = await createCashMovement({
-        sessionId: openSession.id,
+        sessionId: activeSession.id,
         movementType: 'OUT',
         amount: Number(quickCashModal.amount || 0),
         reason: quickCashModal.reason.trim(),
@@ -373,9 +396,9 @@ export default function PuntoDeVenta() {
           </div>
         </div>
         <div className="flex items-center gap-6">
-          <div className={`hidden lg:flex items-center gap-2 rounded-xl border px-4 py-2 text-[11px] font-black uppercase ${activeSession ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
+          <div className={`hidden lg:flex items-center gap-2 rounded-xl border px-4 py-2 text-[11px] font-black uppercase ${activeSession?.status === 'OPEN' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
             <Wallet size={14} />
-            {activeSession ? `Caja abierta · ${activeSession.operator?.full_name || 'Operador sin nombre'}` : 'Caja cerrada'}
+            {activeSession?.status === 'OPEN' ? `Caja abierta · ${activeSession.operator?.full_name}` : 'Caja cerrada'}
           </div>
           <button
             type="button"
@@ -762,6 +785,100 @@ export default function PuntoDeVenta() {
                   Cancelar
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OVERLAY: SELECCIÓN DE TERMINAL ──────────────────────────────── */}
+      {isTerminalSelectionOpen && (
+        <div className="fixed inset-0 z-[200] bg-slate-900 flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl p-8 max-w-lg w-full text-center">
+            <Calculator size={60} className="mx-auto text-[#4C3073] mb-6" />
+            <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight mb-2">Identidad del Terminal</h2>
+            <p className="text-gray-500 mb-8">Este equipo no está configurado. Selecciona a qué caja física corresponde para comenzar.</p>
+            
+            <div className="space-y-3">
+              {terminals.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => handleSelectTerminal(t.id)}
+                  className="w-full py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl font-black uppercase text-gray-700 hover:border-[#4C3073] hover:bg-purple-50 transition-all"
+                >
+                  {t.name}
+                </button>
+              ))}
+              {terminals.length === 0 && (
+                <p className="text-red-500 font-bold">No hay terminales configurados en esta sucursal.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OVERLAY: CAJA CERRADA ────────────────────────────────────────── */}
+      {!activeSession && !loading && !isTerminalSelectionOpen && (
+        <div className="fixed inset-0 z-[150] bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl p-10 max-w-lg w-full text-center shadow-2xl">
+            <div className="w-20 h-20 bg-red-50 border-2 border-red-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
+              <ShieldAlert size={40} className="text-red-500" />
+            </div>
+            <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight mb-3">Caja Cerrada</h2>
+            <p className="text-gray-500 mb-8 leading-relaxed">
+              No hay turnos activos para este terminal: <span className="font-black text-gray-800 uppercase">{terminalId?.slice(0,8)}</span>.<br/>
+              Solicite al encargado la <span className="font-black text-[#4C3073]">Pre-Apertura</span> desde el módulo de Control de Caja.
+            </p>
+            <button 
+              onClick={() => { localStorage.removeItem('pharmacy_terminal_id'); window.location.reload(); }}
+              className="text-[10px] font-black uppercase text-gray-400 hover:text-gray-600 underline"
+            >
+              Cambiar Identidad del Terminal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL: ACTIVACIÓN CON PIN (SESSION PENDING) ──────────────────── */}
+      {activationModal.open && (
+        <div className="fixed inset-0 z-[180] bg-slate-900/95 backdrop-blur-xl flex items-center justify-center p-6">
+          <div className="bg-white rounded-[40px] p-10 max-w-md w-full text-center shadow-2xl border-t-8 border-[#4C3073]">
+            <div className="mb-8">
+              <div className="w-20 h-20 bg-purple-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Wallet size={32} className="text-[#4C3073]" />
+              </div>
+              <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Turno Pre-Abierto</h2>
+              <p className="text-gray-500 mt-2">
+                Asignado a: <span className="font-black text-gray-800 uppercase">{activeSession?.operator?.full_name}</span>
+              </p>
+            </div>
+
+            <div className="bg-gray-50 rounded-3xl p-6 mb-8 border border-gray-100">
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Efectivo Inicial a recibir</p>
+              <p className="text-3xl font-black text-emerald-600">{fmtCLP(activeSession?.opening_balance)}</p>
+            </div>
+
+            <div className="space-y-6">
+              <div>
+                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Ingresa tu PIN de Operador</label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  autoFocus
+                  maxLength={4}
+                  value={activationModal.pinCode}
+                  onChange={(e) => setActivationModal(prev => ({ ...prev, pinCode: e.target.value.replace(/\D/g, '') }))}
+                  className="w-full text-center text-4xl font-black tracking-[0.8em] py-5 bg-gray-50 border-2 border-gray-100 rounded-3xl focus:border-[#4C3073] focus:bg-white outline-none transition-all"
+                  placeholder="••••"
+                />
+              </div>
+
+              <button
+                disabled={activationModal.pinCode.length < 4 || isProcessingSale}
+                onClick={handleActivateSession}
+                className="w-full py-5 bg-[#4C3073] text-white rounded-3xl font-black uppercase text-lg shadow-xl shadow-purple-200 hover:bg-[#3f285f] disabled:opacity-30 active:scale-[0.98] transition-all flex items-center justify-center gap-3"
+              >
+                {isProcessingSale ? <Loader2 className="animate-spin" /> : 'Activar Turno y Abrir Caja'}
+              </button>
             </div>
           </div>
         </div>

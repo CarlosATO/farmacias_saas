@@ -7,10 +7,11 @@ import {
   createCashMovement,
   fetchClosedPosSessions,
   fetchPosOperators,
-  fetchOpenPosSession,
   fetchPosSessionSummary,
-  openPosSession,
   verifyPosOperatorPin,
+  fetchPosTerminals,
+  fetchSessionsByWarehouse,
+  preOpenSession
 } from '../api/pharmacyClient';
 
 const initialMovementModal = {
@@ -31,20 +32,20 @@ export default function ControlCaja() {
   const { activeWarehouse } = useSucursal();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [session, setSession] = useState(null);
-  const [summary, setSummary] = useState(null);
-  const [closedSessions, setClosedSessions] = useState([]);
   const [operators, setOperators] = useState([]);
+  const [terminals, setTerminals] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [selectedSessionId, setSelectedSessionId] = useState(null);
   const [openingBalance, setOpeningBalance] = useState('');
   const [selectedOperatorId, setSelectedOperatorId] = useState('');
-  const [operatorPin, setOperatorPin] = useState('');
   const [movementModal, setMovementModal] = useState(initialMovementModal);
   const [closingModal, setClosingModal] = useState(initialClosingModal);
+  const [openingModal, setOpeningModal] = useState({ open: false, terminalId: null });
 
-  const loadSession = async () => {
+  const loadData = async () => {
     if (!activeWarehouse?.id) {
-      setSession(null);
-      setSummary(null);
+      setTerminals([]);
+      setSessions([]);
       setClosedSessions([]);
       setLoading(false);
       return;
@@ -52,29 +53,35 @@ export default function ControlCaja() {
 
     setLoading(true);
     try {
-      const { data: openSession, error: sessionError } = await fetchOpenPosSession(activeWarehouse.id);
-      if (sessionError) throw sessionError;
+      const [termRes, sessRes, operRes, closedRes] = await Promise.all([
+        fetchPosTerminals(activeWarehouse.id),
+        fetchSessionsByWarehouse(activeWarehouse.id),
+        fetchPosOperators(activeWarehouse.id),
+        fetchClosedPosSessions(activeWarehouse.id, 8)
+      ]);
 
-      const { data: operatorData, error: operatorError } = await fetchPosOperators(activeWarehouse.id);
-      if (operatorError) throw operatorError;
+      if (termRes.error) throw termRes.error;
+      if (sessRes.error) throw sessRes.error;
+      if (operRes.error) throw operRes.error;
+      if (closedRes.error) throw closedRes.error;
 
-      const { data: closedData, error: closedError } = await fetchClosedPosSessions(activeWarehouse.id, 8);
-      if (closedError) throw closedError;
+      setTerminals(termRes.data || []);
+      setSessions(sessRes.data || []);
+      setOperators(operRes.data || []);
+      setClosedSessions(closedRes.data || []);
 
-      setOperators(operatorData || []);
-      setClosedSessions(closedData || []);
-
-      setSession(openSession || null);
-
-      if (openSession) {
-        const { data: sessionSummary, error: summaryError } = await fetchPosSessionSummary(openSession);
-        if (summaryError) throw summaryError;
-        setSummary(sessionSummary);
-      } else {
-        setSummary(null);
+      // Si hay una sesión seleccionada, recargar su resumen
+      if (selectedSessionId) {
+        const currentSession = sessRes.data?.find(s => s.id === selectedSessionId);
+        if (currentSession && currentSession.status === 'OPEN') {
+          const { data: sessionSummary } = await fetchPosSessionSummary(currentSession);
+          setSummary(sessionSummary);
+        } else {
+          setSummary(null);
+        }
       }
     } catch (error) {
-      console.error('Error cargando control de caja:', error);
+      console.error('Error cargando monitoreo de cajas:', error);
       alert(`Error cargando Control de Caja: ${error.message || error}`);
     } finally {
       setLoading(false);
@@ -82,16 +89,21 @@ export default function ControlCaja() {
   };
 
   useEffect(() => {
-    loadSession();
-  }, [activeWarehouse?.id]);
+    loadData();
+  }, [activeWarehouse?.id, selectedSessionId]);
+
+  const activeSession = useMemo(() => {
+    if (!selectedSessionId) return null;
+    return sessions.find(s => s.id === selectedSessionId);
+  }, [sessions, selectedSessionId]);
 
   const expectedCash = useMemo(() => Number(summary?.expectedCash || 0), [summary]);
 
   const fmtCLP = (value) => `$${Number(value || 0).toLocaleString('es-CL')}`;
 
-  const handleOpenSession = async () => {
-    if (!activeWarehouse?.id) {
-      alert('Debes seleccionar una sucursal antes de abrir turno.');
+  const handlePreOpenSession = async () => {
+    if (!activeWarehouse?.id || !openingModal.terminalId) {
+      alert('Debes seleccionar una sucursal y terminal.');
       return;
     }
 
@@ -101,49 +113,34 @@ export default function ControlCaja() {
     }
 
     if (!selectedOperatorId) {
-      alert('Debes seleccionar un operador POS antes de abrir el turno.');
-      return;
-    }
-
-    if (!/^\d{4}$/.test(operatorPin.trim())) {
-      alert('Debes ingresar el PIN de 4 dígitos del operador.');
+      alert('Debes seleccionar un operador POS asignado.');
       return;
     }
 
     setSubmitting(true);
     try {
-      const { data: pinValid, error: pinError } = await verifyPosOperatorPin({
+      const { error } = await preOpenSession({
+        warehouseId: activeWarehouse.id,
+        terminalId: openingModal.terminalId,
         operatorId: selectedOperatorId,
-        warehouseId: activeWarehouse.id,
-        pinCode: operatorPin.trim(),
-      });
-      if (pinError) throw pinError;
-      if (!pinValid) {
-        alert('PIN de operador inválido.');
-        return;
-      }
-
-      const { error } = await openPosSession({
-        warehouseId: activeWarehouse.id,
         openingBalance: Number(openingBalance || 0),
-        operatorId: selectedOperatorId,
       });
       if (error) throw error;
 
       setOpeningBalance('');
       setSelectedOperatorId('');
-      setOperatorPin('');
-      await loadSession();
+      setOpeningModal({ open: false, terminalId: null });
+      await loadData();
     } catch (error) {
-      console.error('Error abriendo turno:', error);
-      alert(`No se pudo abrir el turno: ${error.message || error}`);
+      console.error('Error pre-abriendo turno:', error);
+      alert(`No se pudo pre-abrir el turno: ${error.message || error}`);
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleCreateMovement = async () => {
-    if (!session?.id) return;
+    if (!activeSession?.id) return;
     if (Number(movementModal.amount || 0) <= 0) {
       alert('Debes ingresar un monto mayor a cero.');
       return;
@@ -156,7 +153,7 @@ export default function ControlCaja() {
     setSubmitting(true);
     try {
       const { error } = await createCashMovement({
-        sessionId: session.id,
+        sessionId: activeSession.id,
         movementType: movementModal.movementType,
         amount: Number(movementModal.amount || 0),
         reason: movementModal.reason.trim(),
@@ -164,7 +161,7 @@ export default function ControlCaja() {
       if (error) throw error;
 
       setMovementModal(initialMovementModal);
-      await loadSession();
+      await loadData();
     } catch (error) {
       console.error('Error registrando movimiento de caja:', error);
       alert(`No se pudo registrar el movimiento: ${error.message || error}`);
@@ -174,18 +171,18 @@ export default function ControlCaja() {
   };
 
   const handleCloseSession = async () => {
-    if (!session?.id) return;
+    if (!activeSession?.id) return;
 
     const closingBalance = Number(closingModal.closingBalance || 0);
     if (closingBalance < 0) {
       alert('El efectivo fisico no puede ser negativo.');
       return;
     }
-    if (!session.operator?.id) {
+    if (!activeSession.operator?.id) {
       alert('La sesión no tiene operador POS asociado y no puede cerrarse de forma segura.');
       return;
     }
-    if (!/^\d{4}$/.test(closingModal.pinCode.trim())) {
+    if (!/^\d{4}$/.test(closingModal.pinCode.test?.() || closingModal.pinCode.trim())) {
       alert('Debes ingresar el PIN de 4 dígitos del operador para cerrar el turno.');
       return;
     }
@@ -194,7 +191,7 @@ export default function ControlCaja() {
     setSubmitting(true);
     try {
       const { data: pinValid, error: pinError } = await verifyPosOperatorPin({
-        operatorId: session.operator.id,
+        operatorId: activeSession.operator.id,
         warehouseId: activeWarehouse.id,
         pinCode: closingModal.pinCode.trim(),
       });
@@ -205,14 +202,14 @@ export default function ControlCaja() {
       }
 
       const { error } = await closePosSession({
-        sessionId: session.id,
+        sessionId: activeSession.id,
         closingBalance,
         difference,
       });
       if (error) throw error;
 
       setClosingModal(initialClosingModal);
-      await loadSession();
+      await loadData();
 
       if (difference !== 0) {
         const direction = difference > 0 ? 'sobrante' : 'faltante';
@@ -256,84 +253,92 @@ export default function ControlCaja() {
           </div>
         </div>
 
-        {!session ? (
-          <div className="bg-white border border-gray-200 rounded-2xl p-8 max-w-2xl">
-            <div className="w-14 h-14 rounded-2xl bg-purple-50 border border-purple-100 flex items-center justify-center mb-5">
-              <Wallet size={26} className="text-[#4C3073]" />
-            </div>
-            <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Sin sesion activa</p>
-            <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Abrir Turno de Caja</h2>
-            <p className="text-sm text-gray-500 mt-2 mb-6">Registra el efectivo inicial disponible en gaveta para comenzar a operar este turno.</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          {terminals.map((terminal) => {
+            const terminalSession = sessions.find(s => s.terminal_id === terminal.id && (s.status === 'OPEN' || s.status === 'PENDING'));
+            const status = terminalSession ? terminalSession.status : 'CLOSED';
+            
+            return (
+              <div 
+                key={terminal.id} 
+                className={`bg-white border rounded-2xl p-6 transition-all shadow-sm hover:shadow-md ${
+                  selectedSessionId === terminalSession?.id ? 'ring-2 ring-[#4C3073] border-[#4C3073]' : 'border-gray-200'
+                }`}
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center border ${
+                    status === 'OPEN' ? 'bg-green-50 border-green-100 text-green-600' :
+                    status === 'PENDING' ? 'bg-amber-50 border-amber-100 text-amber-600' :
+                    'bg-gray-50 border-gray-100 text-gray-400'
+                  }`}>
+                    <Calculator size={24} />
+                  </div>
+                  <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest border ${
+                    status === 'OPEN' ? 'bg-green-100 border-green-200 text-green-700' :
+                    status === 'PENDING' ? 'bg-amber-100 border-amber-200 text-amber-700' :
+                    'bg-gray-100 border-gray-200 text-gray-500'
+                  }`}>
+                    {status === 'OPEN' ? 'Abierta' : status === 'PENDING' ? 'Pendiente' : 'Cerrada'}
+                  </span>
+                </div>
 
-            {operators.length === 0 && (
-              <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4">
-                <p className="text-[11px] font-black text-amber-700 uppercase tracking-widest">No hay operadores POS creados para esta sucursal</p>
-                <button
-                  type="button"
-                  onClick={() => navigate('/operadores-pos')}
-                  className="mt-3 rounded-xl bg-[#4C3073] px-4 py-2.5 text-[11px] font-black uppercase text-white"
-                >
-                  Crear Operadores POS
-                </button>
+                <h3 className="text-lg font-black text-gray-900 uppercase truncate">{terminal.name}</h3>
+                
+                {terminalSession ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="flex justify-between items-center text-[11px] font-bold">
+                      <span className="text-gray-400 uppercase tracking-widest">Operador</span>
+                      <span className="text-gray-700 uppercase">{terminalSession.operator?.full_name}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-[11px] font-bold">
+                      <span className="text-gray-400 uppercase tracking-widest">Efectivo Inicial</span>
+                      <span className="text-gray-900">{fmtCLP(terminalSession.opening_balance)}</span>
+                    </div>
+                    
+                    {status === 'OPEN' ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSessionId(terminalSession.id)}
+                        className="w-full mt-2 py-2.5 bg-[#4C3073] text-white rounded-xl text-[10px] font-black uppercase hover:bg-[#3f285f] transition-colors"
+                      >
+                        Monitorear Detalles
+                      </button>
+                    ) : (
+                      <div className="mt-4 p-3 bg-amber-50 border border-amber-100 rounded-xl">
+                        <p className="text-[10px] font-bold text-amber-700 leading-tight">Esperando activación por cajero con PIN físico.</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-6">
+                    <button
+                      type="button"
+                      onClick={() => setOpeningModal({ open: true, terminalId: terminal.id })}
+                      className="w-full py-2.5 border border-gray-200 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-50 transition-colors"
+                    >
+                      Pre-Abrir Turno
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
+            );
+          })}
+        </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 max-w-3xl">
-              <FieldBlock label="Operador POS">
-                <select
-                  value={selectedOperatorId}
-                  onChange={(e) => setSelectedOperatorId(e.target.value)}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073]"
-                >
-                  <option value="">Selecciona operador</option>
-                  {operators.filter((operator) => operator.is_active).map((operator) => (
-                    <option key={operator.id} value={operator.id}>{operator.full_name}</option>
-                  ))}
-                </select>
-              </FieldBlock>
-
-              <FieldBlock label="PIN del Operador">
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  value={operatorPin}
-                  onChange={(e) => setOperatorPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm font-bold tracking-[0.3em] outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073]"
-                  placeholder="0000"
-                />
-              </FieldBlock>
+        {activeSession && activeSession.status === 'OPEN' && (
+          <div className="space-y-6 pt-6 border-t border-gray-200">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-black text-gray-900 uppercase">Detalle: {activeSession.terminal?.name}</h2>
+              <button 
+                onClick={() => setSelectedSessionId(null)}
+                className="text-[10px] font-black uppercase text-gray-400 hover:text-gray-600"
+              >
+                Cerrar Detalle
+              </button>
             </div>
 
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden max-w-sm">
-              <div className="bg-gray-50/50 px-4 py-3 border-b border-gray-200">
-                <p className="text-[11px] font-black text-gray-500 uppercase">Monto Inicial en Efectivo</p>
-              </div>
-              <div className="p-4">
-                <input
-                  type="number"
-                  min="0"
-                  value={openingBalance}
-                  onChange={(e) => setOpeningBalance(e.target.value)}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073]"
-                  placeholder="0"
-                />
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleOpenSession}
-              disabled={submitting}
-              className="mt-6 inline-flex items-center gap-3 rounded-xl bg-[#4C3073] px-6 py-3 text-sm font-black uppercase text-white hover:bg-[#3f285f] transition-colors disabled:opacity-40"
-            >
-              {submitting ? <Loader2 size={18} className="animate-spin" /> : <Wallet size={18} />}
-              Abrir Turno
-            </button>
-          </div>
-        ) : (
-          <>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <MetricCard label="Efectivo Inicial" value={fmtCLP(session.opening_balance)} icon={Wallet} accent="text-[#4C3073]" />
+              <MetricCard label="Efectivo Inicial" value={fmtCLP(activeSession.opening_balance)} icon={Wallet} accent="text-[#4C3073]" />
               <MetricCard label="Ventas en Efectivo" value={fmtCLP(summary?.cashSales)} icon={Banknote} accent="text-green-700" />
               <MetricCard label="Entradas / Salidas" value={`${fmtCLP(summary?.cashEntries)} / ${fmtCLP(summary?.cashOutflows)}`} icon={Calculator} accent="text-gray-800" />
               <MetricCard label="Efectivo Esperado" value={fmtCLP(expectedCash)} icon={ShieldAlert} accent="text-blue-700" />
@@ -345,7 +350,6 @@ export default function ControlCaja() {
                   <div>
                     <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Turno Abierto</p>
                     <p className="text-sm text-gray-500 mt-1">Control en tiempo real de efectivo y movimientos del cajero.</p>
-                    <p className="text-xs text-gray-500 mt-1">Operador activo: <span className="font-black text-gray-700 uppercase">{session.operator?.full_name || 'Sin operador asociado'}</span></p>
                   </div>
                   <div className="flex items-center gap-3 flex-wrap">
                     <button
@@ -370,7 +374,7 @@ export default function ControlCaja() {
                       className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-[11px] font-black uppercase text-white hover:bg-red-700"
                     >
                       <AlertTriangle size={16} />
-                      Cerrar Turno (Arqueo)
+                      Forzar Cierre
                     </button>
                   </div>
                 </div>
@@ -379,11 +383,10 @@ export default function ControlCaja() {
                   <div className="rounded-xl border border-gray-200 bg-[#f8f9fa] p-5">
                     <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Efectivo Esperado en Gaveta</p>
                     <p className="text-3xl font-black text-[#4C3073]">{fmtCLP(expectedCash)}</p>
-                    <p className="text-xs text-gray-500 mt-2">Inicial + Ventas Efectivo + Entradas - Salidas.</p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <SummaryMiniCard label="Sesion" value={session.status} />
+                    <SummaryMiniCard label="Estado" value={activeSession.status} />
                     <SummaryMiniCard label="Ventas Cash" value={`${summary?.sales?.length || 0} comprobantes`} />
                     <SummaryMiniCard label="Movimientos" value={`${summary?.movements?.length || 0} registros`} />
                   </div>
@@ -394,19 +397,19 @@ export default function ControlCaja() {
                 <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
                   <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Movimientos de Caja</p>
                 </div>
-                <div className="p-4 max-h-[420px] overflow-auto divide-y divide-gray-100">
+                <div className="p-4 max-h-[350px] overflow-auto divide-y divide-gray-100">
                   {(summary?.movements?.length || 0) === 0 ? (
                     <div className="py-12 text-center text-gray-400">
                       <Wallet size={28} className="mx-auto mb-3" />
-                      <p className="text-[11px] font-black uppercase tracking-widest">Sin movimientos registrados</p>
+                      <p className="text-[11px] font-black uppercase tracking-widest">Sin movimientos</p>
                     </div>
                   ) : (
                     summary.movements.map((movement) => (
                       <div key={movement.id} className="py-4">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-sm font-black text-gray-900 uppercase">{movement.movement_type === 'IN' ? 'Entrada de Efectivo' : 'Salida de Efectivo'}</p>
-                            <p className="text-xs text-gray-500 mt-1">{movement.reason || 'Sin detalle'}</p>
+                            <p className="text-sm font-black text-gray-900 uppercase">{movement.movement_type === 'IN' ? 'Entrada' : 'Salida'}</p>
+                            <p className="text-xs text-gray-500 mt-1">{movement.reason}</p>
                           </div>
                           <span className={`text-sm font-black ${movement.movement_type === 'IN' ? 'text-green-700' : 'text-red-600'}`}>
                             {movement.movement_type === 'IN' ? '+' : '-'}{fmtCLP(movement.amount)}
@@ -418,88 +421,98 @@ export default function ControlCaja() {
                 </div>
               </div>
             </div>
-
-            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-              <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
-                <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Ventas del Turno</p>
-              </div>
-              <div className="overflow-x-auto">
-                {(summary?.sales?.length || 0) === 0 ? (
-                  <div className="py-14 text-center text-gray-400">
-                    <Banknote size={28} className="mx-auto mb-3" />
-                    <p className="text-[11px] font-black uppercase tracking-widest">Sin ventas cash asociadas a esta sesion</p>
-                  </div>
-                ) : (
-                  <table className="min-w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-white">
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Documento</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Fecha</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Pago</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Monto</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {summary.sales.map((sale) => (
-                        <tr key={sale.id} className="hover:bg-gray-50">
-                          <td className="px-5 py-3 text-sm font-black text-gray-900">{sale.document_number || sale.id.slice(0, 8)}</td>
-                          <td className="px-5 py-3 text-sm text-gray-600">{new Date(sale.created_at).toLocaleString('es-CL')}</td>
-                          <td className="px-5 py-3 text-sm font-bold text-gray-500">{sale.payment_method}</td>
-                          <td className="px-5 py-3 text-sm font-black text-right text-green-700">{fmtCLP(sale.total_amount)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-              <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
-                <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Historial de Turnos Cerrados</p>
-              </div>
-              <div className="overflow-x-auto">
-                {closedSessions.length === 0 ? (
-                  <div className="py-14 text-center text-gray-400">
-                    <ShieldAlert size={28} className="mx-auto mb-3" />
-                    <p className="text-[11px] font-black uppercase tracking-widest">No hay cierres previos para este usuario en la sucursal activa</p>
-                  </div>
-                ) : (
-                  <table className="min-w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-white">
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Operador</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Apertura</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Cierre</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Esperado</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Contado</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Diferencia</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {closedSessions.map((closedSession) => {
-                        const sessionExpectedCash = Number(closedSession.summary?.expectedCash || 0);
-                        const sessionDifference = Number(closedSession.difference || 0);
-                        return (
-                          <tr key={closedSession.id} className="hover:bg-gray-50">
-                            <td className="px-5 py-3 text-sm font-black text-gray-900 uppercase">{closedSession.operator?.full_name || 'Sin operador'}</td>
-                            <td className="px-5 py-3 text-sm text-gray-600">{closedSession.start_time ? new Date(closedSession.start_time).toLocaleString('es-CL') : '—'}</td>
-                            <td className="px-5 py-3 text-sm text-gray-600">{closedSession.end_time ? new Date(closedSession.end_time).toLocaleString('es-CL') : '—'}</td>
-                            <td className="px-5 py-3 text-sm font-black text-right text-blue-700">{fmtCLP(sessionExpectedCash)}</td>
-                            <td className="px-5 py-3 text-sm font-black text-right text-gray-800">{fmtCLP(closedSession.closing_balance)}</td>
-                            <td className={`px-5 py-3 text-sm font-black text-right ${sessionDifference === 0 ? 'text-emerald-700' : sessionDifference > 0 ? 'text-amber-700' : 'text-red-600'}`}>
-                              {sessionDifference === 0 ? fmtCLP(0) : `${sessionDifference > 0 ? '+' : '-'}${fmtCLP(Math.abs(sessionDifference))}`}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          </>
+          </div>
         )}
+
+        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden mt-8">
+          <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
+            <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Historial de Turnos Cerrados</p>
+          </div>
+          <div className="overflow-x-auto">
+            {closedSessions.length === 0 ? (
+              <div className="py-14 text-center text-gray-400">
+                <ShieldAlert size={28} className="mx-auto mb-3" />
+                <p className="text-[11px] font-black uppercase tracking-widest">No hay cierres previos</p>
+              </div>
+            ) : (
+              <table className="min-w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-white">
+                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Terminal</th>
+                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Operador</th>
+                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Cierre</th>
+                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Esperado</th>
+                    <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Diferencia</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {closedSessions.map((closedSession) => {
+                    const sessionExpectedCash = Number(closedSession.summary?.expectedCash || 0);
+                    const sessionDifference = Number(closedSession.difference || 0);
+                    return (
+                      <tr key={closedSession.id} className="hover:bg-gray-50">
+                        <td className="px-5 py-3 text-sm font-black text-gray-900 uppercase">{closedSession.terminal?.name || '—'}</td>
+                        <td className="px-5 py-3 text-sm font-bold text-gray-600 uppercase">{closedSession.operator?.full_name}</td>
+                        <td className="px-5 py-3 text-sm text-gray-500">{new Date(closedSession.end_time).toLocaleString('es-CL')}</td>
+                        <td className="px-5 py-3 text-sm font-black text-right text-blue-700">{fmtCLP(sessionExpectedCash)}</td>
+                        <td className={`px-5 py-3 text-sm font-black text-right ${sessionDifference === 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                          {fmtCLP(sessionDifference)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {openingModal.open && (
+        <ModalFrame title="Pre-Abrir Turno de Caja" onClose={() => setOpeningModal({ open: false, terminalId: null })}>
+          <div className="space-y-4">
+            <div className="p-4 bg-purple-50 rounded-xl border border-purple-100">
+              <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-1">Terminal Seleccionado</p>
+              <p className="text-sm font-black text-[#4C3073] uppercase">{terminals.find(t => t.id === openingModal.terminalId)?.name}</p>
+            </div>
+
+            <FieldBlock label="Operador Responsable">
+              <select
+                value={selectedOperatorId}
+                onChange={(e) => setSelectedOperatorId(e.target.value)}
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073]"
+              >
+                <option value="">Selecciona operador</option>
+                {operators.filter((operator) => operator.is_active).map((operator) => (
+                  <option key={operator.id} value={operator.id}>{operator.full_name}</option>
+                ))}
+              </select>
+            </FieldBlock>
+
+            <FieldBlock label="Efectivo Inicial de Entrega">
+              <input
+                type="number"
+                min="0"
+                value={openingBalance}
+                onChange={(e) => setOpeningBalance(e.target.value)}
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073]"
+                placeholder="0"
+              />
+            </FieldBlock>
+
+            <div className="p-4 bg-amber-50 rounded-xl border border-amber-100">
+              <p className="text-[10px] font-bold text-amber-700 leading-tight">Nota: El turno no se activará hasta que el cajero ingrese su PIN en el terminal físico correspondiente.</p>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setOpeningModal({ open: false, terminalId: null })} className="rounded-xl border border-gray-300 px-4 py-2.5 text-[11px] font-black uppercase text-gray-700">Cancelar</button>
+              <button type="button" onClick={handlePreOpenSession} disabled={submitting} className="rounded-xl bg-[#4C3073] px-6 py-2.5 text-[11px] font-black uppercase text-white disabled:opacity-40">
+                {submitting ? 'Abriendo...' : 'Pre-Abrir Turno'}
+              </button>
+            </div>
+          </div>
+        </ModalFrame>
+      )}
       </div>
 
       {movementModal.open && (

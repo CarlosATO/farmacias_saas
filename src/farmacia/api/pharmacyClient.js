@@ -389,6 +389,93 @@ export const fetchOpenPosSession = async (warehouseId) => {
     .maybeSingle();
 };
 
+/**
+ * Obtiene la sesión activa o pendiente para un terminal específico.
+ * Utilizado por el equipo físico (POS) para identificarse.
+ */
+export const fetchSessionByTerminal = async (terminalId) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !terminalId) return { data: null, error: new Error('Falta terminalId o companyId') };
+
+  return await schema
+    .from('pos_sessions')
+    .select('*, operator:operator_id(id, full_name, is_active), terminal:terminal_id(id, name)')
+    .eq('company_id', companyId)
+    .eq('terminal_id', terminalId)
+    .in('status', ['PENDING', 'OPEN'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+};
+
+/**
+ * Obtiene todas las sesiones (abiertas, cerradas, pendientes) de una sucursal.
+ * Utilizado por el monitor de cajas (ControlCaja).
+ */
+export const fetchSessionsByWarehouse = async (warehouseId) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId) return { data: [], error: new Error('Falta warehouseId') };
+
+  return await schema
+    .from('pos_sessions')
+    .select('*, operator:operator_id(id, full_name), terminal:terminal_id(id, name)')
+    .eq('company_id', companyId)
+    .eq('warehouse_id', warehouseId)
+    .order('created_at', { ascending: false });
+};
+
+export const preOpenSession = async ({ terminalId, warehouseId, operatorId, openingBalance }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+
+  if (!companyId || !userId) return { error: new Error('Usuario no identificado') };
+
+  return await schema
+    .from('pos_sessions')
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      warehouse_id: warehouseId,
+      terminal_id: terminalId,
+      operator_id: operatorId,
+      opening_balance: Number(openingBalance || 0),
+      status: 'PENDING',
+      start_time: new Date().toISOString()
+    })
+    .select()
+    .single();
+};
+
+export const activateSession = async ({ sessionId, operatorId, warehouseId, pinCode }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId) return { error: new Error('Falta companyId') };
+
+  // 1. Verificar PIN
+  const { data: pinValid, error: pinError } = await verifyPosOperatorPin({
+    operatorId,
+    warehouseId,
+    pinCode
+  });
+
+  if (pinError) return { error: pinError };
+  if (!pinValid) return { error: new Error('PIN inválido') };
+
+  // 2. Activar sesión
+  return await schema
+    .from('pos_sessions')
+    .update({ status: 'OPEN' })
+    .eq('id', sessionId)
+    .select()
+    .single();
+};
+
 export const openPosSession = async ({ warehouseId, openingBalance, operatorId }) => {
   const schema = getPharmacySchema();
   const companyId = await getMyCompanyId();
@@ -632,6 +719,40 @@ export const verifyPosOperatorPin = async ({ operatorId, warehouseId, pinCode })
     p_warehouse_id: warehouseId,
     p_pin_code: pinCode,
   });
+};
+
+// --- TERMINALES POS ---
+
+export const fetchPosTerminals = async (warehouseId) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId) return { data: [], error: new Error('Falta companyId o warehouseId') };
+
+  return await schema
+    .from('pos_terminals')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('warehouse_id', warehouseId)
+    .eq('is_active', true)
+    .order('name');
+};
+
+export const createPosTerminal = async ({ warehouseId, name }) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId) return { error: new Error('Falta companyId o warehouseId') };
+
+  return await schema
+    .from('pos_terminals')
+    .insert({
+      company_id: companyId,
+      warehouse_id: warehouseId,
+      name
+    })
+    .select()
+    .single();
 };
 
 // --- ÓRDENES DE COMPRA (LOGÍSTICA) ---
