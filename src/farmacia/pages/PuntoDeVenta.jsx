@@ -137,7 +137,7 @@ export default function PuntoDeVenta() {
     }
   };
 
-  useEffect(() => { loadInitialData(); }, [activeWarehouse?.id]);
+  useEffect(() => { loadInitialData(); }, [activeWarehouse?.id, terminalId]);
 
   // Auto-focus search input when modal opens
   useEffect(() => {

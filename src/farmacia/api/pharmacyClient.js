@@ -755,6 +755,25 @@ export const createPosTerminal = async ({ warehouseId, name }) => {
     .single();
 };
 
+export const updatePosTerminal = async (terminalId, updates) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !terminalId) return { error: new Error('Falta companyId o terminalId') };
+
+  return await schema
+    .from('pos_terminals')
+    .update(updates)
+    .eq('company_id', companyId)
+    .eq('id', terminalId)
+    .select()
+    .single();
+};
+
+export const togglePosTerminalStatus = async (terminalId, isActive) => {
+  return await updatePosTerminal(terminalId, { is_active: isActive });
+};
+
 // --- ÓRDENES DE COMPRA (LOGÍSTICA) ---
 export const fetchSuppliers = async () => {
   const companyId = await getMyCompanyId();

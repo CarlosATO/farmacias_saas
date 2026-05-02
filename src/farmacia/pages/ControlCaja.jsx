@@ -11,7 +11,9 @@ import {
   verifyPosOperatorPin,
   fetchPosTerminals,
   fetchSessionsByWarehouse,
-  preOpenSession
+  preOpenSession,
+  createPosTerminal,
+  togglePosTerminalStatus
 } from '../api/pharmacyClient';
 
 const initialMovementModal = {
@@ -43,6 +45,8 @@ export default function ControlCaja() {
   const [openingModal, setOpeningModal] = useState({ open: false, terminalId: null });
   const [closedSessions, setClosedSessions] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [terminalManagementModal, setTerminalManagementModal] = useState(false);
+  const [newTerminalName, setNewTerminalName] = useState('');
 
   const loadData = async () => {
     if (!activeWarehouse?.id) {
@@ -227,6 +231,37 @@ export default function ControlCaja() {
     }
   };
 
+  const handleCreateTerminal = async () => {
+    if (!newTerminalName.trim()) return;
+    setSubmitting(true);
+    try {
+      const { error } = await createPosTerminal({
+        warehouseId: activeWarehouse.id,
+        name: newTerminalName.trim()
+      });
+      if (error) throw error;
+      setNewTerminalName('');
+      await loadData();
+    } catch (error) {
+      alert(`Error creando terminal: ${error.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleToggleTerminal = async (terminalId, currentStatus) => {
+    setSubmitting(true);
+    try {
+      const { error } = await togglePosTerminalStatus(terminalId, !currentStatus);
+      if (error) throw error;
+      await loadData();
+    } catch (error) {
+      alert(`Error actualizando terminal: ${error.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-6 md:p-8 bg-[#f8f9fa] min-h-full flex items-center justify-center">
@@ -252,6 +287,12 @@ export default function ControlCaja() {
               <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Sucursal</p>
               <p className="text-sm font-black text-[#4C3073] uppercase">{activeWarehouse?.name || 'Sin sucursal'}</p>
             </div>
+            <button
+              onClick={() => setTerminalManagementModal(true)}
+              className="rounded-xl border border-gray-300 px-4 py-3 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Gestionar Cajas Físicas
+            </button>
           </div>
         </div>
 
@@ -584,6 +625,61 @@ export default function ControlCaja() {
               <button type="button" onClick={handleCloseSession} disabled={submitting} className="rounded-xl bg-red-600 px-4 py-2.5 text-[11px] font-black uppercase text-white disabled:opacity-40">
                 {submitting ? 'Cerrando...' : 'Cerrar Turno'}
               </button>
+            </div>
+          </div>
+        </ModalFrame>
+      )}
+
+      {terminalManagementModal && (
+        <ModalFrame title="Gestionar Cajas Físicas (Terminales)" onClose={() => setTerminalManagementModal(false)}>
+          <div className="space-y-6">
+            <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+              <p className="text-[10px] font-black text-gray-400 uppercase mb-3">Agregar Nueva Caja</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newTerminalName}
+                  onChange={(e) => setNewTerminalName(e.target.value)}
+                  placeholder="Ej: Caja Principal, Caja 2..."
+                  className="flex-1 rounded-lg border border-gray-200 px-4 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-purple-100"
+                />
+                <button
+                  onClick={handleCreateTerminal}
+                  disabled={submitting || !newTerminalName.trim()}
+                  className="bg-[#4C3073] text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase disabled:opacity-50"
+                >
+                  Agregar
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[10px] font-black text-gray-400 uppercase">Terminales Registradas</p>
+              <div className="divide-y divide-gray-100 border border-gray-100 rounded-xl overflow-hidden">
+                {terminals.map(t => (
+                  <div key={t.id} className="bg-white p-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-black text-gray-900 uppercase">{t.name}</p>
+                      <p className="text-[10px] text-gray-400 font-bold uppercase">ID: {t.id.slice(0,8)}</p>
+                    </div>
+                    <button
+                      onClick={() => handleToggleTerminal(t.id, t.is_active)}
+                      className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase border ${
+                        t.is_active 
+                          ? 'border-green-200 text-green-700 bg-green-50' 
+                          : 'border-gray-200 text-gray-400 bg-gray-50'
+                      }`}
+                    >
+                      {t.is_active ? 'Activa' : 'Inactiva'}
+                    </button>
+                  </div>
+                ))}
+                {terminals.length === 0 && (
+                  <div className="p-8 text-center text-gray-400">
+                    <p className="text-[10px] font-black uppercase">No hay terminales creadas</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </ModalFrame>
