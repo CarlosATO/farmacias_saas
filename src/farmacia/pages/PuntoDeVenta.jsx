@@ -12,6 +12,9 @@ import {
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
 
+const billDenominations = [20000, 10000, 5000, 2000, 1000];
+const coinDenominations = [500, 100, 50, 10];
+
 export default function PuntoDeVenta() {
   const navigate = useNavigate();
   const { activeWarehouse } = useSucursal();
@@ -29,7 +32,21 @@ export default function PuntoDeVenta() {
   const [quickCashModal, setQuickCashModal] = useState({ open: false, amount: '', reason: '' });
   const [activeSession, setActiveSession] = useState(null);
   const [sessionSummary, setSessionSummary] = useState(null);
-  const [closingModal, setClosingModal] = useState({ open: false, closingBalance: '', pinCode: '' });
+  const [closingModal, setClosingModal] = useState({ 
+    open: false, 
+    closingBalance: '', 
+    pinCode: '',
+    denominations: {
+      '20000': 0, '10000': 0, '5000': 0, '2000': 0, '1000': 0,
+      '500': 0, '100': 0, '50': 0, '10': 0
+    }
+  });
+
+  const declaredTotal = useMemo(() => {
+    return Object.entries(closingModal.denominations || {}).reduce((sum, [denom, qty]) => {
+      return sum + (Number(denom) * Number(qty));
+    }, 0);
+  }, [closingModal.denominations]);
   const [terminalId, setTerminalId] = useState(localStorage.getItem('pharmacy_terminal_id'));
   const [terminals, setTerminals] = useState([]);
   const [isTerminalSelectionOpen, setIsTerminalSelectionOpen] = useState(false);
@@ -279,7 +296,7 @@ export default function PuntoDeVenta() {
   const handleCloseSession = async () => {
     if (!activeSession?.id) return;
 
-    const closingBalance = Number(closingModal.closingBalance || 0);
+    const closingBalance = declaredTotal;
     const expectedCash = Number(sessionSummary?.expectedCash || 0);
 
     if (closingBalance < 0) {
@@ -316,11 +333,16 @@ export default function PuntoDeVenta() {
       });
       if (error) throw error;
 
-      setClosingModal({ open: false, closingBalance: '', pinCode: '' });
-      alert(difference === 0 
-        ? 'Turno cerrado sin diferencias.' 
-        : `Turno cerrado con ${difference > 0 ? 'sobrante' : 'faltante'} de ${fmtCLP(Math.abs(difference))}.`
-      );
+      setClosingModal({ 
+        open: false, 
+        closingBalance: '', 
+        pinCode: '',
+        denominations: {
+          '20000': 0, '10000': 0, '5000': 0, '2000': 0, '1000': 0,
+          '500': 0, '100': 0, '50': 0, '10': 0
+        }
+      });
+      alert('Turno cerrado correctamente.');
       loadInitialData();
     } catch (error) {
       console.error('Error cerrando turno:', error);
@@ -415,7 +437,7 @@ export default function PuntoDeVenta() {
           {activeSession && (
             <button
               type="button"
-              onClick={() => setClosingModal({ open: true, closingBalance: '', pinCode: '' })}
+              onClick={() => setClosingModal(prev => ({ ...prev, open: true }))}
               className="hidden lg:inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-[11px] font-black uppercase text-white hover:bg-red-700 transition-colors shadow-lg shadow-red-900/20"
             >
               <ShieldAlert size={16} />
@@ -733,62 +755,129 @@ export default function PuntoDeVenta() {
       )}
 
       {closingModal.open && (
-        <div className="fixed inset-0 z-[140] bg-black/40 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="bg-gray-50/50 px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-4">
-              <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Cerrar Turno (Arqueo)</p>
-              <button type="button" onClick={() => setClosingModal({ open: false, closingBalance: '', pinCode: '' })} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <X size={20} />
-              </button>
+        <div className="fixed inset-0 z-[200] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-[2.5rem] p-8 max-w-2xl w-full shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Arqueo de Caja Ciego</h2>
+                <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mt-1">Declare el efectivo físico en gaveta</p>
+              </div>
+              <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center">
+                <Calculator size={24} className="text-red-500" />
+              </div>
             </div>
-            <div className="p-6 space-y-5">
-              <div className="rounded-xl border border-purple-100 bg-purple-50/50 p-4">
-                <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-1">Efectivo Esperado en Gaveta</p>
-                <p className="text-2xl font-black text-[#4C3073]">{fmtCLP(sessionSummary?.expectedCash)}</p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+              {/* Billetes */}
+              <div className="space-y-4">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2 flex items-center gap-2">
+                  <Banknote size={14} /> Billetes
+                </p>
+                <div className="space-y-2">
+                  {billDenominations.map(denom => (
+                    <div key={denom} className="flex items-center gap-3">
+                      <div className="w-20 text-[11px] font-black text-gray-700 bg-gray-50 rounded-lg py-2 px-3 border border-gray-100">
+                        {fmtCLP(denom)}
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        value={closingModal.denominations[denom] || ''}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseInt(e.target.value) || 0);
+                          setClosingModal(prev => ({
+                            ...prev,
+                            denominations: { ...prev.denominations, [denom]: val }
+                          }));
+                        }}
+                        className="flex-1 rounded-xl border border-gray-200 px-4 py-2 text-sm font-black outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all text-right"
+                        placeholder="0"
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Efectivo Físico Contado</label>
-                <input
-                  type="number"
-                  min="0"
-                  autoFocus
-                  value={closingModal.closingBalance}
-                  onChange={(e) => setClosingModal((current) => ({ ...current, closingBalance: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3.5 text-lg font-black outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all"
-                  placeholder="0"
-                />
+              {/* Monedas */}
+              <div className="space-y-4">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2 flex items-center gap-2">
+                  <Wallet size={14} /> Monedas
+                </p>
+                <div className="space-y-2">
+                  {coinDenominations.map(denom => (
+                    <div key={denom} className="flex items-center gap-3">
+                      <div className="w-20 text-[11px] font-black text-gray-700 bg-gray-50 rounded-lg py-2 px-3 border border-gray-100">
+                        {fmtCLP(denom)}
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        value={closingModal.denominations[denom] || ''}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseInt(e.target.value) || 0);
+                          setClosingModal(prev => ({
+                            ...prev,
+                            denominations: { ...prev.denominations, [denom]: val }
+                          }));
+                        }}
+                        className="flex-1 rounded-xl border border-gray-200 px-4 py-2 text-sm font-black outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all text-right"
+                        placeholder="0"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 mb-8">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Total Declarado</p>
+                  <p className="text-3xl font-black text-gray-900 mt-1">{fmtCLP(declaredTotal)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Operador</p>
+                  <p className="text-sm font-black text-[#4C3073] uppercase mt-1">{activeSession?.operator?.full_name}</p>
+                </div>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">PIN de Seguridad Operador</label>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">PIN de Seguridad para Cierre</label>
                 <input
                   type="password"
                   inputMode="numeric"
                   value={closingModal.pinCode}
                   onChange={(e) => setClosingModal((current) => ({ ...current, pinCode: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3.5 text-lg font-black tracking-[0.5em] outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all"
+                  className="w-full rounded-2xl border border-gray-200 px-6 py-4 text-2xl font-black tracking-[0.8em] outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all text-center"
                   placeholder="••••"
                 />
               </div>
+            </div>
 
-              <div className="flex flex-col gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleCloseSession}
-                  disabled={isProcessingSale}
-                  className="w-full rounded-xl bg-red-600 py-4 text-sm font-black uppercase text-white shadow-lg shadow-red-200 hover:bg-red-700 active:scale-[0.98] transition-all disabled:opacity-40"
-                >
-                  {isProcessingSale ? <Loader2 size={20} className="animate-spin mx-auto" /> : 'Confirmar Cierre de Turno'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setClosingModal({ open: false, closingBalance: '', pinCode: '' })}
-                  className="w-full py-2 text-[11px] font-black uppercase text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  Cancelar
-                </button>
-              </div>
+            <div className="flex gap-4">
+              <button
+                type="button"
+                onClick={() => setClosingModal({ 
+                  open: false, 
+                  closingBalance: '', 
+                  pinCode: '',
+                  denominations: {
+                    '20000': 0, '10000': 0, '5000': 0, '2000': 0, '1000': 0,
+                    '500': 0, '100': 0, '50': 0, '10': 0
+                  }
+                })}
+                className="flex-1 py-4 text-[11px] font-black uppercase text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseSession}
+                disabled={isProcessingSale}
+                className="flex-[2] rounded-2xl bg-red-600 py-4 text-sm font-black uppercase text-white shadow-xl shadow-red-100 hover:bg-red-700 active:scale-[0.98] transition-all disabled:opacity-40"
+              >
+                {isProcessingSale ? <Loader2 size={20} className="animate-spin mx-auto" /> : 'Finalizar Turno'}
+              </button>
             </div>
           </div>
         </div>
