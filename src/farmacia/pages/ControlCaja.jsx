@@ -584,7 +584,6 @@ export default function ControlCaja() {
           </div>
         )}
       </div>
-      </div>
 
       {openingModal.open && (
         <ModalFrame title="Pre-Abrir Turno de Caja" onClose={() => setOpeningModal({ open: false, terminalId: null })}>
