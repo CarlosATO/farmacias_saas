@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Search, Plus, Trash2, ShieldAlert, FlaskConical,
-  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet, Calculator
+  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet, Calculator, ArrowLeft
 } from 'lucide-react';
 import {
   fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchPricesByWarehouse,
@@ -12,6 +13,7 @@ import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
 
 export default function PuntoDeVenta() {
+  const navigate = useNavigate();
   const { activeWarehouse } = useSucursal();
   const [products, setProducts] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
@@ -814,6 +816,14 @@ export default function PuntoDeVenta() {
                 <p className="text-red-500 font-bold">No hay terminales configurados en esta sucursal.</p>
               )}
             </div>
+
+            <button
+              onClick={() => navigate('/farmacia/escritorio')}
+              className="mt-10 inline-flex items-center gap-2 text-[11px] font-black uppercase text-gray-400 hover:text-[#4C3073] transition-colors"
+            >
+              <ArrowLeft size={16} />
+              Volver al Menú Principal
+            </button>
           </div>
         </div>
       )}
