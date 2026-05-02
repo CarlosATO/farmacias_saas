@@ -548,6 +548,20 @@ export const fetchPosSessionSummary = async (session) => {
   };
 };
 
+export const fetchSessionSalesSummary = async (sessionId) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !sessionId) return { data: [], error: new Error('Falta companyId o sessionId') };
+
+  return await schema
+    .from('sales')
+    .select('*, sale_items(*, product:product_id(name))')
+    .eq('company_id', companyId)
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: false });
+};
+
 export const fetchClosedPosSessions = async (warehouseId, limit = 10) => {
   const schema = getPharmacySchema();
   const companyId = await getMyCompanyId();

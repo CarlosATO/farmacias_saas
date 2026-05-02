@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowDownCircle, ArrowUpCircle, Banknote, Calculator, Loader2, ShieldAlert, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, Banknote, Calculator, Loader2, ShieldAlert, Wallet } from 'lucide-react';
 import { useSucursal } from '../context/SucursalContext';
 import {
   closePosSession,
@@ -13,7 +13,8 @@ import {
   fetchSessionsByWarehouse,
   preOpenSession,
   createPosTerminal,
-  togglePosTerminalStatus
+  togglePosTerminalStatus,
+  fetchSessionSalesSummary
 } from '../api/pharmacyClient';
 
 const initialMovementModal = {
@@ -45,6 +46,8 @@ export default function ControlCaja() {
   const [openingModal, setOpeningModal] = useState({ open: false, terminalId: null });
   const [closedSessions, setClosedSessions] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [sessionSales, setSessionSales] = useState([]);
+  const [activeTab, setActiveTab] = useState('movements'); // 'movements' | 'sales'
   const [terminalManagementModal, setTerminalManagementModal] = useState(false);
   const [newTerminalName, setNewTerminalName] = useState('');
 
@@ -76,14 +79,19 @@ export default function ControlCaja() {
       setOperators(operRes.data || []);
       setClosedSessions(closedRes.data || []);
 
-      // Si hay una sesión seleccionada, recargar su resumen
+      // Si hay una sesión seleccionada, recargar su resumen y ventas
       if (selectedSessionId) {
         const currentSession = sessRes.data?.find(s => s.id === selectedSessionId);
         if (currentSession && currentSession.status === 'OPEN') {
-          const { data: sessionSummary } = await fetchPosSessionSummary(currentSession);
+          const [{ data: sessionSummary }, { data: salesRes }] = await Promise.all([
+            fetchPosSessionSummary(currentSession),
+            fetchSessionSalesSummary(currentSession.id)
+          ]);
           setSummary(sessionSummary);
+          setSessionSales(salesRes || []);
         } else {
           setSummary(null);
+          setSessionSales([]);
         }
       }
     } catch (error) {
@@ -371,13 +379,19 @@ export default function ControlCaja() {
         {activeSession && activeSession.status === 'OPEN' && (
           <div className="space-y-6 pt-6 border-t border-gray-200">
             <div className="flex items-center justify-between">
-              <h2 className="text-xl font-black text-gray-900 uppercase">Detalle: {activeSession.terminal?.name}</h2>
-              <button 
-                onClick={() => setSelectedSessionId(null)}
-                className="text-[10px] font-black uppercase text-gray-400 hover:text-gray-600"
-              >
-                Cerrar Detalle
-              </button>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setSelectedSessionId(null)}
+                  className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <ArrowLeft size={16} />
+                  Volver al Monitor de Cajas
+                </button>
+                <h2 className="text-xl font-black text-gray-900 uppercase">Detalle: {activeSession.terminal?.name}</h2>
+              </div>
+              <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-[10px] font-black uppercase border border-green-200">
+                Sesión Activa
+              </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -436,33 +450,84 @@ export default function ControlCaja() {
                 </div>
               </div>
 
-              <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-                <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
-                  <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Movimientos de Caja</p>
-                </div>
-                <div className="p-4 max-h-[350px] overflow-auto divide-y divide-gray-100">
-                  {(summary?.movements?.length || 0) === 0 ? (
-                    <div className="py-12 text-center text-gray-400">
-                      <Wallet size={28} className="mx-auto mb-3" />
-                      <p className="text-[11px] font-black uppercase tracking-widest">Sin movimientos</p>
-                    </div>
-                  ) : (
-                    summary.movements.map((movement) => (
-                      <div key={movement.id} className="py-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-black text-gray-900 uppercase">{movement.movement_type === 'IN' ? 'Entrada' : 'Salida'}</p>
-                            <p className="text-xs text-gray-500 mt-1">{movement.reason}</p>
-                          </div>
-                          <span className={`text-sm font-black ${movement.movement_type === 'IN' ? 'text-green-700' : 'text-red-600'}`}>
-                            {movement.movement_type === 'IN' ? '+' : '-'}{fmtCLP(movement.amount)}
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden min-h-[400px] flex flex-col">
+              <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-2 flex items-center gap-6">
+                <button
+                  onClick={() => setActiveTab('movements')}
+                  className={`py-3 text-[11px] font-black uppercase tracking-widest border-b-2 transition-colors ${
+                    activeTab === 'movements' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  Movimientos de Caja
+                </button>
+                <button
+                  onClick={() => setActiveTab('sales')}
+                  className={`py-3 text-[11px] font-black uppercase tracking-widest border-b-2 transition-colors ${
+                    activeTab === 'sales' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  Ventas Realizadas
+                </button>
               </div>
+
+              <div className="flex-1 p-4 overflow-auto">
+                {activeTab === 'movements' ? (
+                  <div className="divide-y divide-gray-100">
+                    {(summary?.movements?.length || 0) === 0 ? (
+                      <div className="py-20 text-center text-gray-400">
+                        <Wallet size={32} className="mx-auto mb-3 opacity-20" />
+                        <p className="text-[11px] font-black uppercase tracking-widest">Sin movimientos de cash</p>
+                      </div>
+                    ) : (
+                      summary.movements.map((movement) => (
+                        <div key={movement.id} className="py-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-black text-gray-900 uppercase">{movement.movement_type === 'IN' ? 'Entrada' : 'Salida'}</p>
+                              <p className="text-xs text-gray-500 mt-1">{movement.reason}</p>
+                            </div>
+                            <span className={`text-sm font-black ${movement.movement_type === 'IN' ? 'text-green-700' : 'text-red-600'}`}>
+                              {movement.movement_type === 'IN' ? '+' : '-'}{fmtCLP(movement.amount)}
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    {sessionSales.length === 0 ? (
+                      <div className="py-20 text-center text-gray-400">
+                        <Calculator size={32} className="mx-auto mb-3 opacity-20" />
+                        <p className="text-[11px] font-black uppercase tracking-widest">No se han registrado ventas</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {sessionSales.map((sale) => (
+                          <div key={sale.id} className="rounded-xl border border-gray-100 bg-gray-50/30 p-4">
+                            <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
+                              <div>
+                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Venta {sale.document_number}</p>
+                                <p className="text-[10px] text-gray-500 font-bold">{new Date(sale.created_at).toLocaleTimeString('es-CL')}</p>
+                              </div>
+                              <span className="text-sm font-black text-gray-900">{fmtCLP(sale.total_amount)}</span>
+                            </div>
+                            <div className="space-y-2">
+                              {sale.sale_items?.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-center text-[11px]">
+                                  <span className="text-gray-600 font-bold uppercase">{item.product?.name} x {item.quantity}</span>
+                                  <span className="text-gray-400">{fmtCLP(item.subtotal)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
             </div>
           </div>
         )}
