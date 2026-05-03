@@ -61,6 +61,7 @@ export default function ControlCaja() {
   const [selectedAuditSession, setSelectedAuditSession] = useState(null);
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
 
+
   const loadData = async () => {
     if (!activeWarehouse?.id) {
       setTerminals([]);
@@ -147,6 +148,16 @@ export default function ControlCaja() {
 
   const expectedCash = useMemo(() => Number(summary?.expectedCash || 0), [summary]);
 
+  if (!activeWarehouse) {
+    return (
+      <div className="flex justify-center items-center h-screen bg-[#f8f9fa]">
+        <div className="text-center">
+          <Loader2 size={30} className="animate-spin mx-auto mb-3 text-[#4C3073]" />
+          <p className="text-sm font-black uppercase tracking-widest text-gray-400">Cargando sucursal...</p>
+        </div>
+      </div>
+    );
+  }
 
   const handlePreOpenSession = async () => {
     if (!activeWarehouse?.id || !openingModal.terminalId) {
@@ -861,6 +872,8 @@ export default function ControlCaja() {
             </div>
           </div>
         </ModalFrame>
+      )}
+
       {isAuditModalOpen && selectedAuditSession && (
         <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 print:p-0 print:bg-white print:relative">
           <div className="bg-white rounded-[2.5rem] w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 print:shadow-none print:max-h-none print:rounded-none">
