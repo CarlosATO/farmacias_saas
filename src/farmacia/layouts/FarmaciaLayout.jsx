@@ -174,7 +174,7 @@ export default function FarmaciaLayout() {
                 <span className="hidden xl:block text-[11px] font-black uppercase tracking-widest text-white whitespace-nowrap">FarmaDATIX SaaS</span>
               </button>
 
-              <div className="hidden xl:flex items-end self-end min-w-0 overflow-x-auto no-scrollbar">
+              <div className="flex items-end self-end min-w-0 overflow-x-auto no-scrollbar">
                 {RIBBON_TABS.map((tab) => {
                   const isActive = activeTab === tab.id;
                   return (
@@ -185,7 +185,7 @@ export default function FarmaciaLayout() {
                         setActiveTab(tab.id);
                         if (tab.type === 'link' && tab.to) navigate(tab.to);
                       }}
-                      className={`px-3 2xl:px-4 py-3 text-[11px] font-black uppercase tracking-wider whitespace-nowrap border-t border-l border-r transition-colors ${isActive
+                      className={`px-3 py-3 text-[10px] md:text-[11px] font-black uppercase tracking-wider whitespace-nowrap border-t border-l border-r transition-colors ${isActive
                         ? 'bg-white text-[#4C3073] border-white rounded-t-lg'
                         : 'bg-transparent text-white/75 border-transparent hover:text-white'
                         }`}
@@ -198,9 +198,9 @@ export default function FarmaciaLayout() {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              <div className="hidden lg:flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 w-[170px] xl:w-[320px]">
+              <div className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 w-[150px] md:w-[200px] xl:w-[250px]">
                 <MapPin size={16} className="text-white/70 shrink-0" />
-                <label htmlFor="warehouse-selector-top" className="hidden xl:block text-[10px] font-black text-white/60 uppercase tracking-widest shrink-0">Sucursal</label>
+                <label htmlFor="warehouse-selector-top" className="hidden md:block text-[10px] font-black text-white/60 uppercase tracking-widest shrink-0">Sucursal</label>
                 <select
                   id="warehouse-selector-top"
                   value={activeWarehouse?.id || ''}
@@ -278,27 +278,6 @@ export default function FarmaciaLayout() {
           </div>
         </div>
 
-        <div className="xl:hidden bg-[#4C3073] border-t border-white/10 px-4 py-2 overflow-x-auto no-scrollbar">
-          <div className="flex items-center gap-2 min-w-max">
-            {RIBBON_TABS.map((tab) => {
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveTab(tab.id);
-                    if (tab.type === 'link' && tab.to) navigate(tab.to);
-                  }}
-                  className={`rounded-lg px-3 py-2 text-[11px] font-black uppercase whitespace-nowrap ${isActive ? 'bg-white text-[#4C3073]' : 'bg-white/10 text-white'
-                    }`}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
       </header>
 
       <main className="flex-1 overflow-auto bg-[#f8f9fa]">

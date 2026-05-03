@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, Banknote, Calculator, Loader2, ShieldAlert, Wallet, Calendar, FileText, Printer, ChevronRight, Search } from 'lucide-react';
+import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, Banknote, Calculator, Loader2, ShieldAlert, Wallet, Calendar, FileText, Printer, ChevronRight, Search, CreditCard } from 'lucide-react';
 import { useSucursal } from '../context/SucursalContext';
 import {
   closePosSession,
@@ -59,7 +59,8 @@ export default function ControlCaja() {
   });
   const [auditSessions, setAuditSessions] = useState([]);
   const [selectedAuditSession, setSelectedAuditSession] = useState(null);
-  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [currentView, setCurrentView] = useState('MAIN'); // 'MAIN' | 'LIVE_DETAIL' | 'AUDIT_REPORT' | 'SALE_DETAIL'
+  const [selectedSale, setSelectedSale] = useState(null);
 
 
   const loadData = async () => {
@@ -325,10 +326,203 @@ export default function ControlCaja() {
     );
   }
 
+  // --- RENDERING VIEWS ---
+
+  if (currentView === 'SALE_DETAIL' && selectedSale) {
+    return (
+      <div className="p-6 md:p-8 bg-[#f8f9fa] min-h-screen">
+        <div className="max-w-4xl mx-auto space-y-6">
+          <div className="flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-6 py-4">
+            <button
+              onClick={() => setCurrentView('AUDIT_REPORT')}
+              className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <ArrowLeft size={16} /> Volver al Informe
+            </button>
+            <div className="text-right">
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Documento</p>
+              <p className="text-sm font-black text-[#4C3073] uppercase">{selectedSale.document_number}</p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-3xl overflow-hidden shadow-sm">
+            <div className="p-8 border-b border-gray-100 bg-gray-50/30">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h1 className="text-2xl font-black text-gray-900 uppercase">Detalle de Venta</h1>
+                  <p className="text-xs text-gray-400 font-bold mt-1 uppercase">Fecha: {new Date(selectedSale.created_at).toLocaleString('es-CL')}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Medio de Pago</p>
+                  <span className="inline-block px-3 py-1 bg-purple-100 text-[#4C3073] rounded-full text-[10px] font-black uppercase mt-1">
+                    {selectedSale.payment_method}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-0">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-white border-b border-gray-100">
+                    <th className="px-8 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Producto</th>
+                    <th className="px-8 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">Cant.</th>
+                    <th className="px-8 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Precio</th>
+                    <th className="px-8 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {selectedSale.sale_items?.map((item, idx) => (
+                    <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                      <td className="px-8 py-5">
+                        <p className="text-sm font-bold text-gray-800 uppercase">{item.product?.name}</p>
+                        <p className="text-[9px] text-gray-400 font-bold uppercase mt-0.5">SKU: {item.product_id?.slice(0,8)}</p>
+                      </td>
+                      <td className="px-8 py-5 text-center text-sm font-black text-gray-900">{item.quantity}</td>
+                      <td className="px-8 py-5 text-right text-sm text-gray-600">{fmtCLP(item.unit_price)}</td>
+                      <td className="px-8 py-5 text-right text-sm font-black text-gray-900">{fmtCLP(item.subtotal)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50/50">
+                    <td colSpan="3" className="px-8 py-6 text-right text-[11px] font-black text-gray-400 uppercase tracking-widest">Total Documento</td>
+                    <td className="px-8 py-6 text-right text-2xl font-black text-[#4C3073]">{fmtCLP(selectedSale.total_amount)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentView === 'AUDIT_REPORT' && selectedAuditSession) {
+    return (
+      <div className="p-6 md:p-8 bg-[#f8f9fa] min-h-screen print:p-0 print:bg-white">
+        <div className="max-w-5xl mx-auto space-y-6">
+          <div className="flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-6 py-4 print:hidden">
+            <button
+              onClick={() => { setCurrentView('MAIN'); setSelectedAuditSession(null); }}
+              className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <ArrowLeft size={16} /> Volver al Historial
+            </button>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => window.print()}
+                className="rounded-xl border border-gray-200 px-5 py-2.5 text-[10px] font-black uppercase text-gray-600 hover:bg-gray-50 flex items-center gap-2 transition-all"
+              >
+                <Printer size={16} /> Imprimir Informe
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[2.5rem] border border-gray-200 shadow-sm overflow-hidden print:border-none print:shadow-none">
+            {/* Header */}
+            <div className="bg-white border-b border-gray-100 px-10 py-10 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-5">
+                <div className="w-14 h-14 bg-purple-50 rounded-2xl flex items-center justify-center text-[#4C3073]">
+                  <FileText size={28} />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-black text-gray-900 uppercase tracking-tight">Auditoría de Turno</h2>
+                  <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mt-1">
+                    Turno: <span className="text-gray-900">{selectedAuditSession.id.slice(0,8)}</span> • 
+                    Terminal: <span className="text-gray-900">{selectedAuditSession.terminal?.name}</span>
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Estado</p>
+                <span className="text-sm font-black text-emerald-600 uppercase">Cerrado Correctamente</span>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-10 space-y-10">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div className="space-y-4">
+                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2">Resumen General</h3>
+                  <div className="space-y-3">
+                    <SummaryMiniCard label="Cajero" value={selectedAuditSession.operator?.full_name} />
+                    <SummaryMiniCard label="Apertura" value={new Date(selectedAuditSession.start_time).toLocaleString('es-CL')} />
+                    <SummaryMiniCard label="Cierre" value={new Date(selectedAuditSession.end_time).toLocaleString('es-CL')} />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2">Conciliación de Efectivo</h3>
+                  <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden print:border-gray-900">
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Saldo Inicial</span><span className="font-black text-gray-900">{fmtCLP(selectedAuditSession.opening_balance)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Ventas Efectivo</span><span className="font-black text-emerald-600">+{fmtCLP(selectedAuditSession.summary?.cashSales)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Ingresos Manuales</span><span className="font-black text-blue-600">+{fmtCLP(selectedAuditSession.summary?.cashEntries)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Salidas Manuales</span><span className="font-black text-red-600">-{fmtCLP(selectedAuditSession.summary?.cashOutflows)}</span></div>
+                    <div className="flex justify-between p-4 bg-gray-50/50 print:bg-white"><span className="text-gray-900 text-xs font-black uppercase">Efectivo Esperado</span><span className="font-black text-gray-900">{fmtCLP(selectedAuditSession.summary?.expectedCash)}</span></div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2 flex items-center gap-2">
+                    <CreditCard size={16} className="text-gray-400" /> Otros Medios
+                  </h3>
+                  <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden print:border-gray-900">
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Tarjetas</span><span className="font-black">{fmtCLP(selectedAuditSession.summary?.cardSales)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Transferencias</span><span className="font-black">{fmtCLP(selectedAuditSession.summary?.transferSales)}</span></div>
+                    <div className="flex justify-between p-4 bg-gray-50/50 print:bg-white"><span className="text-gray-900 text-xs font-black uppercase">Total No-Efectivo</span><span className="font-black text-[#4C3073]">{fmtCLP((selectedAuditSession.summary?.cardSales || 0) + (selectedAuditSession.summary?.transferSales || 0))}</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                  <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest">Listado de Ventas Registradas</h3>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase">Total Transacciones: {selectedAuditSession.summary?.sales?.length || 0}</p>
+                </div>
+                <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden print:border-gray-900">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-widest print:bg-white print:text-gray-900 border-b border-gray-100">
+                        <th className="px-6 py-4">Doc #</th>
+                        <th className="px-6 py-4">Hora</th>
+                        <th className="px-6 py-4">Medio de Pago</th>
+                        <th className="px-6 py-4 text-right">Total</th>
+                        <th className="px-6 py-4 text-center print:hidden">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50 print:divide-gray-900">
+                      {selectedAuditSession.summary?.sales?.map((sale) => (
+                        <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-6 py-4 font-bold text-gray-900">{sale.document_number}</td>
+                          <td className="px-6 py-4 text-gray-500">{new Date(sale.created_at).toLocaleTimeString('es-CL')}</td>
+                          <td className="px-6 py-4 uppercase font-black text-gray-400 print:text-gray-900">{sale.payment_method}</td>
+                          <td className="px-6 py-4 text-right font-black">{fmtCLP(sale.total_amount)}</td>
+                          <td className="px-6 py-4 text-center print:hidden">
+                            <button 
+                              onClick={() => { setSelectedSale(sale); setCurrentView('SALE_DETAIL'); }}
+                              className="px-3 py-1.5 rounded-lg border border-gray-200 text-[10px] font-black uppercase text-[#4C3073] hover:bg-purple-50"
+                            >
+                              Ver Detalle
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 md:p-8 bg-[#f8f9fa] min-h-full">
       <div className="max-w-7xl mx-auto space-y-6">
-        {!selectedSessionId ? (
+        {currentView === 'MAIN' ? (
           <div className="space-y-6">
             <div className="bg-white border border-gray-200 rounded-3xl overflow-hidden shadow-sm">
               <div className="border-b border-gray-100 flex items-center justify-between bg-white px-8">
@@ -508,7 +702,7 @@ export default function ControlCaja() {
                                 </td>
                                 <td className="px-8 py-6 text-center">
                                   <button 
-                                    onClick={() => { setSelectedAuditSession(session); setIsAuditModalOpen(true); }}
+                                    onClick={() => { setSelectedAuditSession(session); setCurrentView('AUDIT_REPORT'); }}
                                     className="inline-flex items-center gap-2 text-[10px] font-black uppercase text-[#4C3073] hover:underline"
                                   >
                                     <FileText size={14} />
@@ -540,7 +734,7 @@ export default function ControlCaja() {
               <div className="flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-6 py-4">
                 <div className="flex items-center gap-4">
                   <button
-                    onClick={() => setSelectedSessionId(null)}
+                    onClick={() => setCurrentView('MAIN')}
                     className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
                   >
                     <ArrowLeft size={16} />
@@ -670,21 +864,13 @@ export default function ControlCaja() {
                     ) : (
                       <div className="space-y-4">
                         {sessionSales.map((sale) => (
-                          <div key={sale.id} className="rounded-xl border border-gray-100 bg-gray-50/30 p-4">
+                          <div key={sale.id} className="rounded-xl border border-gray-100 bg-gray-50/30 p-4 cursor-pointer hover:bg-gray-50 transition-colors" onClick={() => { setSelectedSale(sale); setCurrentView('SALE_DETAIL'); }}>
                             <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
                               <div>
                                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Venta {sale.document_number}</p>
                                 <p className="text-[10px] text-gray-500 font-bold">{new Date(sale.created_at).toLocaleTimeString('es-CL')}</p>
                               </div>
                               <span className="text-sm font-black text-gray-900">{fmtCLP(sale.total_amount)}</span>
-                            </div>
-                            <div className="space-y-2">
-                              {sale.sale_items?.map((item, idx) => (
-                                <div key={idx} className="flex justify-between items-center text-[11px]">
-                                  <span className="text-gray-600 font-bold uppercase">{item.product?.name} x {item.quantity}</span>
-                                  <span className="text-gray-400">{fmtCLP(item.subtotal)}</span>
-                                </div>
-                              ))}
                             </div>
                           </div>
                         ))}
@@ -695,9 +881,10 @@ export default function ControlCaja() {
               </div>
             </div>
           </div>
-          </div>
-        )
-      )}
+        </div>
+      )
+    )
+  }
       </div>
 
       {openingModal.open && (
@@ -872,127 +1059,6 @@ export default function ControlCaja() {
             </div>
           </div>
         </ModalFrame>
-      )}
-
-      {isAuditModalOpen && selectedAuditSession && (
-        <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 print:p-0 print:bg-white print:relative">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 print:shadow-none print:max-h-none print:rounded-none">
-            {/* Modal Header */}
-            <div className="bg-white border-b border-gray-100 px-10 py-8 flex items-center justify-between shrink-0 print:hidden">
-              <div className="flex items-center gap-5">
-                <div className="w-14 h-14 bg-purple-50 rounded-2xl flex items-center justify-center text-[#4C3073]">
-                  <FileText size={28} />
-                </div>
-                <div>
-                  <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Informe de Auditoría de Turno</h2>
-                  <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mt-1">
-                    Turno: <span className="text-gray-900">{selectedAuditSession.id.slice(0,8)}</span> • 
-                    Terminal: <span className="text-gray-900">{selectedAuditSession.terminal?.name}</span>
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => window.print()}
-                  className="rounded-xl border border-gray-200 px-5 py-3 text-[10px] font-black uppercase text-gray-600 hover:bg-gray-50 flex items-center gap-2 transition-all"
-                >
-                  <Printer size={16} /> Imprimir Resumen
-                </button>
-                <button 
-                  onClick={() => { setIsAuditModalOpen(false); setSelectedAuditSession(null); }}
-                  className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-red-50 hover:text-red-500 transition-all"
-                >
-                  <Calculator size={18} className="rotate-45" />
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Content */}
-            <div className="flex-1 overflow-y-auto p-10 space-y-8 print:p-8 print:overflow-visible">
-              <div className="hidden print:block mb-8 border-b-2 border-gray-900 pb-4">
-                <h1 className="text-2xl font-black uppercase">Reporte de Auditoría de Caja</h1>
-                <p className="text-xs font-bold uppercase mt-2">Sucursal: {activeWarehouse?.name} • Fecha Turno: {new Date(selectedAuditSession.end_time).toLocaleString('es-CL')}</p>
-                <p className="text-xs font-bold uppercase mt-1">ID Turno: {selectedAuditSession.id} • Operador: {selectedAuditSession.operator?.full_name}</p>
-              </div>
-
-              {/* Grid 1: Resumen de Arqueo */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 print:bg-white print:border-gray-900">
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 print:text-gray-900">Efectivo Esperado</p>
-                  <p className="text-2xl font-black text-gray-900">{fmtCLP(selectedAuditSession.summary?.expectedCash)}</p>
-                </div>
-                <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 print:bg-white print:border-gray-900">
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 print:text-gray-900">Monto Declarado</p>
-                  <p className="text-2xl font-black text-[#4C3073]">{fmtCLP(selectedAuditSession.closing_balance)}</p>
-                </div>
-                <div className={`rounded-3xl p-6 border border-gray-100 print:bg-white print:border-gray-900 ${
-                  Number(selectedAuditSession.difference) === 0 ? 'bg-emerald-50' : Number(selectedAuditSession.difference) > 0 ? 'bg-blue-50' : 'bg-red-50'
-                }`}>
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 print:text-gray-900">Diferencia</p>
-                  <p className={`text-2xl font-black ${
-                    Number(selectedAuditSession.difference) === 0 ? 'text-emerald-600' : Number(selectedAuditSession.difference) > 0 ? 'text-blue-600' : 'text-red-600'
-                  }`}>
-                    {Number(selectedAuditSession.difference) > 0 ? '+' : ''}{fmtCLP(selectedAuditSession.difference)}
-                  </p>
-                </div>
-              </div>
-
-              {/* Grid 2: Desglose Financiero */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <div className="space-y-4">
-                  <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest border-b border-gray-100 pb-3 flex items-center gap-2">
-                    <Banknote size={16} className="text-gray-400" /> Resumen Financiero
-                  </h3>
-                  <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden print:border-gray-900">
-                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Saldo Inicial</span><span className="font-black">{fmtCLP(selectedAuditSession.opening_balance)}</span></div>
-                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Ventas en Efectivo</span><span className="font-black text-emerald-600">+{fmtCLP(selectedAuditSession.summary?.cashSales)}</span></div>
-                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Entradas Manuales</span><span className="font-black text-emerald-600">+{fmtCLP(selectedAuditSession.summary?.cashEntries)}</span></div>
-                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Salidas Manuales</span><span className="font-black text-red-600">-{fmtCLP(selectedAuditSession.summary?.cashOutflows)}</span></div>
-                    <div className="flex justify-between p-4 bg-gray-50/50 print:bg-white"><span className="text-gray-900 text-xs font-black uppercase">Efectivo Esperado</span><span className="font-black text-gray-900">{fmtCLP(selectedAuditSession.summary?.expectedCash)}</span></div>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest border-b border-gray-100 pb-3 flex items-center gap-2">
-                    <CreditCard size={16} className="text-gray-400" /> Otros Medios de Pago
-                  </h3>
-                  <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden print:border-gray-900">
-                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Tarjetas</span><span className="font-black">{fmtCLP(selectedAuditSession.summary?.cardSales)}</span></div>
-                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Transferencias</span><span className="font-black">{fmtCLP(selectedAuditSession.summary?.transferSales)}</span></div>
-                    <div className="flex justify-between p-4 bg-gray-50/50 print:bg-white"><span className="text-gray-900 text-xs font-black uppercase">Total No-Efectivo</span><span className="font-black text-[#4C3073]">{fmtCLP((selectedAuditSession.summary?.cardSales || 0) + (selectedAuditSession.summary?.transferSales || 0))}</span></div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Listado de Ventas */}
-              <div className="space-y-4">
-                <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest border-b border-gray-100 pb-3">Detalle de Ventas del Turno</h3>
-                <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden print:border-gray-900">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-widest print:bg-white print:text-gray-900">
-                        <th className="px-6 py-3">Doc #</th>
-                        <th className="px-6 py-3">Hora</th>
-                        <th className="px-6 py-3">Medio de Pago</th>
-                        <th className="px-6 py-3 text-right">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50 print:divide-gray-900">
-                      {selectedAuditSession.summary?.sales?.map((sale) => (
-                        <tr key={sale.id} className="print:border-b print:border-gray-100">
-                          <td className="px-6 py-3 font-bold text-gray-900">{sale.document_number}</td>
-                          <td className="px-6 py-3 text-gray-500">{new Date(sale.created_at).toLocaleTimeString('es-CL')}</td>
-                          <td className="px-6 py-3 uppercase font-black text-gray-400 print:text-gray-900">{sale.payment_method}</td>
-                          <td className="px-6 py-3 text-right font-black">{fmtCLP(sale.total_amount)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

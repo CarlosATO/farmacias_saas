@@ -3,6 +3,13 @@
 ## 1. Topología Físico-Lógica (3 Niveles)
 El sistema utiliza un modelo jerárquico anidado para representar el mundo real, mapeando términos técnicos WMS al vocabulario de retail farmacéutico.
 
+##Subir cambios
+Solo debemos subir cambios en las ramas  cuando lo solicitemos expresamente para evitar errores.
+
+##Diseño
+El diseño debe evitar abrir modales. Siempre necesitamos que todo se abra en pantallas independientes respetando Diseños y colores de UI establecidos.
+
+
 * **Nivel 1: EL LOCAL / SUCURSAL (Edificio Físico)**
   * **Base de datos:** Tabla `warehouses`.
   * **Definición:** El contenedor principal. Representa una dirección física (Ej: "Local San Javier").

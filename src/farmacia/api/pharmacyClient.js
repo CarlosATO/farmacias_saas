@@ -510,7 +510,7 @@ export const fetchPosSessionSummary = async (session) => {
 
   const allSalesResult = await schema
     .from('sales')
-    .select('id, total_amount, payment_method, created_at, document_number, patient_id')
+    .select('id, total_amount, payment_method, created_at, document_number, patient_id, sale_items(*, product:product_id(name))')
     .eq('company_id', companyId)
     .eq('session_id', session.id)
     .order('created_at', { ascending: false });
@@ -623,6 +623,7 @@ export const fetchClosedSessions = async (warehouseId, startDate, endDate) => {
 
   let query = schema
     .from('pos_sessions')
+    .select('*, operator:pos_operators!operator_id(full_name), terminal:pos_terminals!terminal_id(name)')
     .eq('company_id', companyId)
     .eq('warehouse_id', warehouseId)
     .eq('status', 'CLOSED');
@@ -630,9 +631,7 @@ export const fetchClosedSessions = async (warehouseId, startDate, endDate) => {
   if (startDate) query = query.gte('end_time', `${startDate}T00:00:00.000Z`);
   if (endDate) query = query.lte('end_time', `${endDate}T23:59:59.999Z`);
 
-  const { data: sessions, error } = await query
-    .select('*, operator:pos_operators!operator_id(full_name), terminal:pos_terminals!terminal_id(name)')
-    .order('end_time', { ascending: false });
+  const { data: sessions, error } = await query.order('end_time', { ascending: false });
 
   if (error) {
     console.error("Error en fetchClosedSessions:", error);
