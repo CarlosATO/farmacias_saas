@@ -147,7 +147,6 @@ export default function ControlCaja() {
 
   const expectedCash = useMemo(() => Number(summary?.expectedCash || 0), [summary]);
 
-  const fmtCLP = (value) => `$${Number(value || 0).toLocaleString('es-CL')}`;
 
   const handlePreOpenSession = async () => {
     if (!activeWarehouse?.id || !openingModal.terminalId) {
