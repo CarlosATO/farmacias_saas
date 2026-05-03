@@ -623,17 +623,21 @@ export const fetchClosedSessions = async (warehouseId, startDate, endDate) => {
 
   let query = schema
     .from('pos_sessions')
-    .select('*, operator:operator_id(id, full_name), admin:user_id(id, email), terminal:terminal_id(name)')
     .eq('company_id', companyId)
     .eq('warehouse_id', warehouseId)
     .eq('status', 'CLOSED');
 
-  if (startDate) query = query.gte('end_time', startDate);
-  if (endDate) query = query.lte('end_time', endDate);
+  if (startDate) query = query.gte('end_time', `${startDate}T00:00:00.000Z`);
+  if (endDate) query = query.lte('end_time', `${endDate}T23:59:59.999Z`);
 
-  const { data: sessions, error } = await query.order('end_time', { ascending: false });
+  const { data: sessions, error } = await query
+    .select('*, operator:operator_id(full_name), terminal:terminal_id(name)')
+    .order('end_time', { ascending: false });
 
-  if (error) return { data: [], error };
+  if (error) {
+    console.error("Error en fetchClosedSessions:", error);
+    return { data: [], error };
+  }
 
   // Enriquecer con resumen para auditoría
   const summarized = await Promise.all(sessions.map(async (session) => {

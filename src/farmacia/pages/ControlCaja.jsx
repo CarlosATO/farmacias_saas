@@ -119,8 +119,8 @@ export default function ControlCaja() {
     try {
       const { data, error } = await fetchClosedSessions(
         activeWarehouse.id,
-        dateFilter.start ? new Date(dateFilter.start + 'T00:00:00').toISOString() : null,
-        dateFilter.end ? new Date(dateFilter.end + 'T23:59:59').toISOString() : null
+        dateFilter.start,
+        dateFilter.end
       );
       if (error) throw error;
       setAuditSessions(data || []);
