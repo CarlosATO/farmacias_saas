@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, Banknote, Calculator, Loader2, ShieldAlert, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, Banknote, Calculator, Loader2, ShieldAlert, Wallet, Calendar, FileText, Printer, ChevronRight, Search } from 'lucide-react';
 import { useSucursal } from '../context/SucursalContext';
 import {
   closePosSession,
@@ -14,7 +14,8 @@ import {
   preOpenSession,
   createPosTerminal,
   togglePosTerminalStatus,
-  fetchSessionSalesSummary
+  fetchSessionSalesSummary,
+  fetchClosedSessions
 } from '../api/pharmacyClient';
 
 const initialMovementModal = {
@@ -48,8 +49,17 @@ export default function ControlCaja() {
   const [summary, setSummary] = useState(null);
   const [sessionSales, setSessionSales] = useState([]);
   const [activeTab, setActiveTab] = useState('movements'); // 'movements' | 'sales'
+  const [activeMainTab, setActiveMainTab] = useState('monitor'); // 'monitor' | 'history'
   const [terminalManagementModal, setTerminalManagementModal] = useState(false);
   const [newTerminalName, setNewTerminalName] = useState('');
+  
+  const [dateFilter, setDateFilter] = useState({
+    start: new Date(new Date().setDate(new Date().getDate() - 7)).toISOString().split('T')[0],
+    end: new Date().toISOString().split('T')[0]
+  });
+  const [auditSessions, setAuditSessions] = useState([]);
+  const [selectedAuditSession, setSelectedAuditSession] = useState(null);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
 
   const loadData = async () => {
     if (!activeWarehouse?.id) {
@@ -102,9 +112,33 @@ export default function ControlCaja() {
     }
   };
 
+  const fetchAuditData = async () => {
+    if (!activeWarehouse?.id) return;
+    setLoading(true);
+    try {
+      const { data, error } = await fetchClosedSessions(
+        activeWarehouse.id,
+        dateFilter.start ? new Date(dateFilter.start + 'T00:00:00').toISOString() : null,
+        dateFilter.end ? new Date(dateFilter.end + 'T23:59:59').toISOString() : null
+      );
+      if (error) throw error;
+      setAuditSessions(data || []);
+    } catch (error) {
+      console.error('Error fetching audit data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    loadData();
-  }, [activeWarehouse?.id, selectedSessionId]);
+    if (activeMainTab === 'history') {
+      fetchAuditData();
+    } else {
+      loadData();
+    }
+  }, [activeWarehouse?.id, selectedSessionId, activeMainTab]);
+
+  const fmtCLP = (n) => `$${Number(n || 0).toLocaleString('es-CL')}`;
 
   const activeSession = useMemo(() => {
     if (!selectedSessionId) return null;
@@ -285,142 +319,211 @@ export default function ControlCaja() {
     <div className="p-6 md:p-8 bg-[#f8f9fa] min-h-full">
       <div className="max-w-7xl mx-auto space-y-6">
         {!selectedSessionId ? (
-          <>
-            <div className="bg-white border border-gray-200 rounded-2xl p-6">
-              <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Ventas / Control de Caja</p>
-              <div className="flex items-start justify-between gap-4 flex-wrap">
-                <div>
-                  <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Apertura y Cierre de Turnos</h1>
-                  <p className="text-sm text-gray-500 mt-2">Modulo financiero para control de sesiones de caja por sucursal y cajero.</p>
-                </div>
-                <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3 text-right">
-                  <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Sucursal</p>
-                  <p className="text-sm font-black text-[#4C3073] uppercase">{activeWarehouse?.name || 'Sin sucursal'}</p>
-                </div>
-                <button
-                  onClick={() => setTerminalManagementModal(true)}
-                  className="rounded-xl border border-gray-300 px-4 py-3 text-[11px] font-black uppercase text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Gestionar Cajas Físicas
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {terminals.map((terminal) => {
-                const terminalSession = sessions.find(s => s.terminal_id === terminal.id && (s.status === 'OPEN' || s.status === 'PENDING'));
-                const status = terminalSession ? terminalSession.status : 'CLOSED';
-                
-                return (
-                  <div 
-                    key={terminal.id} 
-                    className={`bg-white border rounded-2xl p-6 transition-all shadow-sm hover:shadow-md ${
-                      selectedSessionId === terminalSession?.id ? 'ring-2 ring-[#4C3073] border-[#4C3073]' : 'border-gray-200'
-                    }`}
+          <div className="space-y-6">
+            <div className="bg-white border border-gray-200 rounded-3xl overflow-hidden shadow-sm">
+              <div className="border-b border-gray-100 flex items-center justify-between bg-white px-8">
+                <div className="flex gap-10">
+                  <button 
+                    onClick={() => setActiveMainTab('monitor')}
+                    className={`py-6 text-[11px] font-black uppercase tracking-widest border-b-2 transition-all ${activeMainTab === 'monitor' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-300 hover:text-gray-500'}`}
                   >
-                    <div className="flex items-start justify-between mb-4">
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center border ${
-                        status === 'OPEN' ? 'bg-green-50 border-green-100 text-green-600' :
-                        status === 'PENDING' ? 'bg-amber-50 border-amber-100 text-amber-600' :
-                        'bg-gray-50 border-gray-100 text-gray-400'
-                      }`}>
-                        <Calculator size={24} />
+                    Monitor en Vivo
+                  </button>
+                  <button 
+                    onClick={() => setActiveMainTab('history')}
+                    className={`py-6 text-[11px] font-black uppercase tracking-widest border-b-2 transition-all ${activeMainTab === 'history' ? 'border-[#4C3073] text-[#4C3073]' : 'border-transparent text-gray-300 hover:text-gray-500'}`}
+                  >
+                    Historial de Turnos
+                  </button>
+                </div>
+                {activeMainTab === 'monitor' && (
+                  <button
+                    onClick={() => setTerminalManagementModal(true)}
+                    className="rounded-xl border border-gray-200 bg-gray-50 px-5 py-2.5 text-[10px] font-black uppercase text-gray-600 hover:bg-gray-100 transition-colors flex items-center gap-2"
+                  >
+                    <Calculator size={14} />
+                    Gestionar Cajas
+                  </button>
+                )}
+              </div>
+
+              <div className="p-8">
+                {activeMainTab === 'monitor' ? (
+                  <div className="space-y-8">
+                    <div className="flex items-start justify-between gap-4 flex-wrap">
+                      <div>
+                        <h1 className="text-3xl font-black text-gray-900 uppercase tracking-tight">Estado de Terminales</h1>
+                        <p className="text-sm text-gray-400 mt-2">Monitoreo en tiempo real de apertura, actividad y arqueo de cajas.</p>
                       </div>
-                      <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest border ${
-                        status === 'OPEN' ? 'bg-green-100 border-green-200 text-green-700' :
-                        status === 'PENDING' ? 'bg-amber-100 border-amber-200 text-amber-700' :
-                        'bg-gray-100 border-gray-200 text-gray-500'
-                      }`}>
-                        {status === 'OPEN' ? 'Abierta' : status === 'PENDING' ? 'Pendiente' : 'Cerrada'}
-                      </span>
+                      <div className="rounded-2xl border border-purple-100 bg-purple-50/50 px-6 py-4 text-right">
+                        <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Sucursal Activa</p>
+                        <p className="text-base font-black text-[#4C3073] uppercase">{activeWarehouse?.name}</p>
+                      </div>
                     </div>
 
-                    <h3 className="text-lg font-black text-gray-900 uppercase truncate">{terminal.name}</h3>
-                    
-                    {terminalSession ? (
-                      <div className="mt-4 space-y-3">
-                        <div className="flex justify-between items-center text-[11px] font-bold">
-                          <span className="text-gray-400 uppercase tracking-widest">Operador</span>
-                          <span className="text-gray-700 uppercase">{terminalSession.operator?.full_name}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-[11px] font-bold">
-                          <span className="text-gray-400 uppercase tracking-widest">Efectivo Inicial</span>
-                          <span className="text-gray-900">{fmtCLP(terminalSession.opening_balance)}</span>
-                        </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                      {terminals.map((terminal) => {
+                        const terminalSession = sessions.find(s => s.terminal_id === terminal.id && (s.status === 'OPEN' || s.status === 'PENDING'));
+                        const status = terminalSession ? terminalSession.status : 'CLOSED';
                         
-                        {status === 'OPEN' ? (
-                          <button
-                            type="button"
-                            onClick={() => setSelectedSessionId(terminalSession.id)}
-                            className="w-full mt-2 py-2.5 bg-[#4C3073] text-white rounded-xl text-[10px] font-black uppercase hover:bg-[#3f285f] transition-colors"
-                          >
-                            Monitorear Detalles
-                          </button>
-                        ) : (
-                          <div className="mt-4 p-3 bg-amber-50 border border-amber-100 rounded-xl">
-                            <p className="text-[10px] font-bold text-amber-700 leading-tight">Esperando activación por cajero con PIN físico.</p>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="mt-6">
-                        <button
-                          type="button"
-                          onClick={() => setOpeningModal({ open: true, terminalId: terminal.id })}
-                          className="w-full py-2.5 border border-gray-200 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-50 transition-colors"
-                        >
-                          Pre-Abrir Turno
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden mt-8">
-              <div className="bg-gray-50/50 border-b border-gray-200 px-6 py-4">
-                <p className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Historial de Turnos Cerrados</p>
-              </div>
-              <div className="overflow-x-auto">
-                {closedSessions.length === 0 ? (
-                  <div className="py-14 text-center text-gray-400">
-                    <ShieldAlert size={28} className="mx-auto mb-3" />
-                    <p className="text-[11px] font-black uppercase tracking-widest">No hay cierres previos</p>
-                  </div>
-                ) : (
-                  <table className="min-w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-white">
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Terminal</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Operador</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest">Cierre</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Esperado</th>
-                        <th className="px-5 py-3 text-[11px] font-black text-gray-500 uppercase tracking-widest text-right">Diferencia</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {closedSessions.map((closedSession) => {
-                        const sessionExpectedCash = Number(closedSession.summary?.expectedCash || 0);
-                        const sessionDifference = Number(closedSession.difference || 0);
                         return (
-                          <tr key={closedSession.id} className="hover:bg-gray-50">
-                            <td className="px-5 py-3 text-sm font-black text-gray-900 uppercase">{closedSession.terminal?.name || '—'}</td>
-                            <td className="px-5 py-3 text-sm font-bold text-gray-600 uppercase">{closedSession.operator?.full_name}</td>
-                            <td className="px-5 py-3 text-sm text-gray-500">{new Date(closedSession.end_time).toLocaleString('es-CL')}</td>
-                            <td className="px-5 py-3 text-sm font-black text-right text-blue-700">{fmtCLP(sessionExpectedCash)}</td>
-                            <td className={`px-5 py-3 text-sm font-black text-right ${sessionDifference === 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                              {fmtCLP(sessionDifference)}
-                            </td>
-                          </tr>
+                          <div 
+                            key={terminal.id} 
+                            className={`group relative overflow-hidden rounded-3xl border-2 transition-all duration-300 p-6 ${
+                              status === 'OPEN' 
+                                ? 'border-emerald-100 bg-emerald-50/30' 
+                                : status === 'PENDING'
+                                  ? 'border-amber-100 bg-amber-50/30'
+                                  : 'border-gray-100 bg-white hover:border-gray-200'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between mb-4">
+                              <div className={`p-3 rounded-2xl ${
+                                status === 'OPEN' ? 'bg-emerald-100 text-emerald-600' : 
+                                status === 'PENDING' ? 'bg-amber-100 text-amber-600' : 'bg-gray-100 text-gray-400'
+                              }`}>
+                                <Wallet size={24} />
+                              </div>
+                              <span className={`text-[9px] font-black uppercase px-3 py-1 rounded-full border ${
+                                status === 'OPEN' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
+                                status === 'PENDING' ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-gray-100 text-gray-500 border-gray-200'
+                              }`}>
+                                {status === 'OPEN' ? 'Activa' : status === 'PENDING' ? 'Esperando' : 'Cerrada'}
+                              </span>
+                            </div>
+
+                            <h3 className="text-lg font-black text-gray-900 uppercase tracking-tight">{terminal.name}</h3>
+                            <p className="text-xs text-gray-500 mt-1 uppercase font-bold">
+                              {terminalSession ? terminalSession.operator?.full_name : 'Sin operador asignado'}
+                            </p>
+
+                            <div className="mt-6 pt-6 border-t border-gray-100 flex items-center justify-between">
+                              {status === 'CLOSED' ? (
+                                <button
+                                  onClick={() => setOpeningModal({ open: true, terminalId: terminal.id })}
+                                  className="w-full py-3 bg-[#4C3073] text-white rounded-xl text-[11px] font-black uppercase hover:bg-[#3d275c] transition-all shadow-lg shadow-purple-100"
+                                >
+                                  Pre-Abrir Turno
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => setSelectedSessionId(terminalSession.id)}
+                                  className={`w-full py-3 border-2 rounded-xl text-[11px] font-black uppercase transition-all flex items-center justify-center gap-2 ${
+                                    status === 'OPEN' 
+                                      ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-100' 
+                                      : 'border-amber-200 text-amber-700 hover:bg-amber-100'
+                                  }`}
+                                >
+                                  <ShieldAlert size={14} />
+                                  Monitorear Detalle
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         );
                       })}
-                    </tbody>
-                  </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-8">
+                    <div className="flex items-end justify-between gap-6 flex-wrap bg-gray-50 rounded-3xl p-8 border border-gray-100">
+                      <div className="flex items-center gap-6">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-2">
+                            <Calendar size={14} /> Desde
+                          </label>
+                          <input 
+                            type="date" 
+                            value={dateFilter.start}
+                            onChange={(e) => setDateFilter(prev => ({ ...prev, start: e.target.value }))}
+                            className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-2">
+                            <Calendar size={14} /> Hasta
+                          </label>
+                          <input 
+                            type="date" 
+                            value={dateFilter.end}
+                            onChange={(e) => setDateFilter(prev => ({ ...prev, end: e.target.value }))}
+                            className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-4 focus:ring-purple-50 focus:border-[#4C3073] transition-all"
+                          />
+                        </div>
+                      </div>
+                      <button 
+                        onClick={fetchAuditData}
+                        className="bg-[#4C3073] text-white px-8 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest flex items-center gap-3 shadow-xl shadow-purple-100 hover:bg-[#3d275c] transition-all"
+                      >
+                        <Search size={18} />
+                        Consultar Historial
+                      </button>
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-gray-200 overflow-hidden">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="bg-gray-50/50 border-b border-gray-100">
+                            <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest">Turno / Terminal</th>
+                            <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest">Cajero / Operador</th>
+                            <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Monto Declarado</th>
+                            <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Diferencia</th>
+                            <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {auditSessions.map((session) => {
+                            const diff = Number(session.difference || 0);
+                            return (
+                              <tr key={session.id} className="hover:bg-gray-50/50 transition-colors">
+                                <td className="px-8 py-6">
+                                  <div className="flex flex-col">
+                                    <span className="text-sm font-black text-gray-900 uppercase">{session.terminal?.name}</span>
+                                    <span className="text-[10px] text-gray-400 font-bold uppercase mt-1">{new Date(session.end_time).toLocaleString('es-CL')}</span>
+                                  </div>
+                                </td>
+                                <td className="px-8 py-6">
+                                  <div className="flex flex-col">
+                                    <span className="text-sm font-bold text-gray-700 uppercase">{session.operator?.full_name}</span>
+                                    <span className="text-[10px] text-gray-400 uppercase mt-0.5">ID: {session.id.slice(0,8)}</span>
+                                  </div>
+                                </td>
+                                <td className="px-8 py-6 text-right text-sm font-black text-gray-900">
+                                  {fmtCLP(session.closing_balance)}
+                                </td>
+                                <td className={`px-8 py-6 text-right text-sm font-black ${
+                                  diff === 0 ? 'text-emerald-600' : diff > 0 ? 'text-blue-600' : 'text-red-600'
+                                }`}>
+                                  {diff > 0 ? '+' : ''}{fmtCLP(diff)}
+                                </td>
+                                <td className="px-8 py-6 text-center">
+                                  <button 
+                                    onClick={() => { setSelectedAuditSession(session); setIsAuditModalOpen(true); }}
+                                    className="inline-flex items-center gap-2 text-[10px] font-black uppercase text-[#4C3073] hover:underline"
+                                  >
+                                    <FileText size={14} />
+                                    Ver Auditoría
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {auditSessions.length === 0 && (
+                            <tr>
+                              <td colSpan="5" className="px-8 py-20 text-center text-gray-300">
+                                <FileText size={48} className="mx-auto mb-4 opacity-10" />
+                                <p className="text-[11px] font-black uppercase tracking-widest">No hay sesiones cerradas en este rango</p>
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
-          </>
+          </div>
         ) : (
           activeSession && activeSession.status === 'OPEN' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -759,6 +862,125 @@ export default function ControlCaja() {
             </div>
           </div>
         </ModalFrame>
+      {isAuditModalOpen && selectedAuditSession && (
+        <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 print:p-0 print:bg-white print:relative">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 print:shadow-none print:max-h-none print:rounded-none">
+            {/* Modal Header */}
+            <div className="bg-white border-b border-gray-100 px-10 py-8 flex items-center justify-between shrink-0 print:hidden">
+              <div className="flex items-center gap-5">
+                <div className="w-14 h-14 bg-purple-50 rounded-2xl flex items-center justify-center text-[#4C3073]">
+                  <FileText size={28} />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Informe de Auditoría de Turno</h2>
+                  <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mt-1">
+                    Turno: <span className="text-gray-900">{selectedAuditSession.id.slice(0,8)}</span> • 
+                    Terminal: <span className="text-gray-900">{selectedAuditSession.terminal?.name}</span>
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => window.print()}
+                  className="rounded-xl border border-gray-200 px-5 py-3 text-[10px] font-black uppercase text-gray-600 hover:bg-gray-50 flex items-center gap-2 transition-all"
+                >
+                  <Printer size={16} /> Imprimir Resumen
+                </button>
+                <button 
+                  onClick={() => { setIsAuditModalOpen(false); setSelectedAuditSession(null); }}
+                  className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-red-50 hover:text-red-500 transition-all"
+                >
+                  <Calculator size={18} className="rotate-45" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-10 space-y-8 print:p-8 print:overflow-visible">
+              <div className="hidden print:block mb-8 border-b-2 border-gray-900 pb-4">
+                <h1 className="text-2xl font-black uppercase">Reporte de Auditoría de Caja</h1>
+                <p className="text-xs font-bold uppercase mt-2">Sucursal: {activeWarehouse?.name} • Fecha Turno: {new Date(selectedAuditSession.end_time).toLocaleString('es-CL')}</p>
+                <p className="text-xs font-bold uppercase mt-1">ID Turno: {selectedAuditSession.id} • Operador: {selectedAuditSession.operator?.full_name}</p>
+              </div>
+
+              {/* Grid 1: Resumen de Arqueo */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 print:bg-white print:border-gray-900">
+                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 print:text-gray-900">Efectivo Esperado</p>
+                  <p className="text-2xl font-black text-gray-900">{fmtCLP(selectedAuditSession.summary?.expectedCash)}</p>
+                </div>
+                <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 print:bg-white print:border-gray-900">
+                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 print:text-gray-900">Monto Declarado</p>
+                  <p className="text-2xl font-black text-[#4C3073]">{fmtCLP(selectedAuditSession.closing_balance)}</p>
+                </div>
+                <div className={`rounded-3xl p-6 border border-gray-100 print:bg-white print:border-gray-900 ${
+                  Number(selectedAuditSession.difference) === 0 ? 'bg-emerald-50' : Number(selectedAuditSession.difference) > 0 ? 'bg-blue-50' : 'bg-red-50'
+                }`}>
+                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 print:text-gray-900">Diferencia</p>
+                  <p className={`text-2xl font-black ${
+                    Number(selectedAuditSession.difference) === 0 ? 'text-emerald-600' : Number(selectedAuditSession.difference) > 0 ? 'text-blue-600' : 'text-red-600'
+                  }`}>
+                    {Number(selectedAuditSession.difference) > 0 ? '+' : ''}{fmtCLP(selectedAuditSession.difference)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Grid 2: Desglose Financiero */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="space-y-4">
+                  <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest border-b border-gray-100 pb-3 flex items-center gap-2">
+                    <Banknote size={16} className="text-gray-400" /> Resumen Financiero
+                  </h3>
+                  <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden print:border-gray-900">
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Saldo Inicial</span><span className="font-black">{fmtCLP(selectedAuditSession.opening_balance)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Ventas en Efectivo</span><span className="font-black text-emerald-600">+{fmtCLP(selectedAuditSession.summary?.cashSales)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Entradas Manuales</span><span className="font-black text-emerald-600">+{fmtCLP(selectedAuditSession.summary?.cashEntries)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Salidas Manuales</span><span className="font-black text-red-600">-{fmtCLP(selectedAuditSession.summary?.cashOutflows)}</span></div>
+                    <div className="flex justify-between p-4 bg-gray-50/50 print:bg-white"><span className="text-gray-900 text-xs font-black uppercase">Efectivo Esperado</span><span className="font-black text-gray-900">{fmtCLP(selectedAuditSession.summary?.expectedCash)}</span></div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest border-b border-gray-100 pb-3 flex items-center gap-2">
+                    <CreditCard size={16} className="text-gray-400" /> Otros Medios de Pago
+                  </h3>
+                  <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden print:border-gray-900">
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Tarjetas</span><span className="font-black">{fmtCLP(selectedAuditSession.summary?.cardSales)}</span></div>
+                    <div className="flex justify-between p-4"><span className="text-gray-500 text-xs font-bold uppercase print:text-gray-900">Transferencias</span><span className="font-black">{fmtCLP(selectedAuditSession.summary?.transferSales)}</span></div>
+                    <div className="flex justify-between p-4 bg-gray-50/50 print:bg-white"><span className="text-gray-900 text-xs font-black uppercase">Total No-Efectivo</span><span className="font-black text-[#4C3073]">{fmtCLP((selectedAuditSession.summary?.cardSales || 0) + (selectedAuditSession.summary?.transferSales || 0))}</span></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Listado de Ventas */}
+              <div className="space-y-4">
+                <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest border-b border-gray-100 pb-3">Detalle de Ventas del Turno</h3>
+                <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden print:border-gray-900">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-widest print:bg-white print:text-gray-900">
+                        <th className="px-6 py-3">Doc #</th>
+                        <th className="px-6 py-3">Hora</th>
+                        <th className="px-6 py-3">Medio de Pago</th>
+                        <th className="px-6 py-3 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50 print:divide-gray-900">
+                      {selectedAuditSession.summary?.sales?.map((sale) => (
+                        <tr key={sale.id} className="print:border-b print:border-gray-100">
+                          <td className="px-6 py-3 font-bold text-gray-900">{sale.document_number}</td>
+                          <td className="px-6 py-3 text-gray-500">{new Date(sale.created_at).toLocaleTimeString('es-CL')}</td>
+                          <td className="px-6 py-3 uppercase font-black text-gray-400 print:text-gray-900">{sale.payment_method}</td>
+                          <td className="px-6 py-3 text-right font-black">{fmtCLP(sale.total_amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

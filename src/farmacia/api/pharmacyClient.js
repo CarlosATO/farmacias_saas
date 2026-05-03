@@ -508,14 +508,14 @@ export const fetchPosSessionSummary = async (session) => {
     return { data: null, error: new Error('No se pudo resolver compania o sesion.') };
   }
 
-  const cashSalesResult = await schema
+  const allSalesResult = await schema
     .from('sales')
     .select('id, total_amount, payment_method, created_at, document_number, patient_id')
     .eq('company_id', companyId)
     .eq('session_id', session.id)
-    .eq('payment_method', 'CASH')
     .order('created_at', { ascending: false });
-  if (cashSalesResult.error) return { data: null, error: cashSalesResult.error };
+
+  if (allSalesResult.error) return { data: null, error: allSalesResult.error };
 
   const movementsResult = await schema
     .from('cash_movements')
@@ -526,8 +526,19 @@ export const fetchPosSessionSummary = async (session) => {
 
   if (movementsResult.error) return { data: null, error: movementsResult.error };
 
-  const cashSales = (cashSalesResult.data || []).reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0);
+  const sales = allSalesResult.data || [];
   const movements = movementsResult.data || [];
+
+  const totalsByMethod = sales.reduce((acc, sale) => {
+    const method = sale.payment_method || 'CASH';
+    acc[method] = (acc[method] || 0) + Number(sale.total_amount || 0);
+    return acc;
+  }, {});
+
+  const cashSales = totalsByMethod['CASH'] || 0;
+  const cardSales = totalsByMethod['CARD'] || 0;
+  const transferSales = totalsByMethod['TRANSFER'] || 0;
+
   const cashEntries = movements
     .filter((movement) => movement.movement_type === 'IN')
     .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
@@ -538,11 +549,14 @@ export const fetchPosSessionSummary = async (session) => {
   return {
     data: {
       cashSales,
+      cardSales,
+      transferSales,
       cashEntries,
       cashOutflows,
       expectedCash: Number(session.opening_balance || 0) + cashSales + cashEntries - cashOutflows,
-      sales: cashSalesResult.data || [],
+      sales,
       movements,
+      totalsByMethod
     },
     error: null,
   };
@@ -599,6 +613,35 @@ export const fetchClosedPosSessions = async (warehouseId, limit = 10) => {
   }));
 
   return { data: summarizedSessions, error: null };
+};
+
+export const fetchClosedSessions = async (warehouseId, startDate, endDate) => {
+  const schema = getPharmacySchema();
+  const companyId = await getMyCompanyId();
+
+  if (!companyId || !warehouseId) return { data: [], error: new Error('Falta companyId o warehouseId') };
+
+  let query = schema
+    .from('pos_sessions')
+    .select('*, operator:operator_id(id, full_name), admin:user_id(id, email), terminal:terminal_id(name)')
+    .eq('company_id', companyId)
+    .eq('warehouse_id', warehouseId)
+    .eq('status', 'CLOSED');
+
+  if (startDate) query = query.gte('end_time', startDate);
+  if (endDate) query = query.lte('end_time', endDate);
+
+  const { data: sessions, error } = await query.order('end_time', { ascending: false });
+
+  if (error) return { data: [], error };
+
+  // Enriquecer con resumen para auditoría
+  const summarized = await Promise.all(sessions.map(async (session) => {
+    const { data: summary } = await fetchPosSessionSummary(session);
+    return { ...session, summary };
+  }));
+
+  return { data: summarized, error: null };
 };
 
 export const createCashMovement = async ({ sessionId, movementType, amount, reason }) => {
