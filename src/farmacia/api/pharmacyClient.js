@@ -631,7 +631,7 @@ export const fetchClosedSessions = async (warehouseId, startDate, endDate) => {
   if (endDate) query = query.lte('end_time', `${endDate}T23:59:59.999Z`);
 
   const { data: sessions, error } = await query
-    .select('*, operator:operator_id(full_name), terminal:terminal_id(name)')
+    .select('*, operator:pos_operators!operator_id(full_name), terminal:terminal_id(name)')
     .order('end_time', { ascending: false });
 
   if (error) {
