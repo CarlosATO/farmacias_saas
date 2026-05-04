@@ -28,6 +28,16 @@ CREATE TABLE pharmacy.cash_movements (
   CONSTRAINT cash_movements_session_id_fkey FOREIGN KEY (session_id) REFERENCES pharmacy.pos_sessions(id),
   CONSTRAINT cash_movements_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
+CREATE TABLE pharmacy.doctors (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  rut text NOT NULL,
+  full_name text NOT NULL,
+  specialty text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT doctors_pkey PRIMARY KEY (id),
+  CONSTRAINT doctors_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id)
+);
 CREATE TABLE pharmacy.inventory_batches (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL,
@@ -121,6 +131,18 @@ CREATE TABLE pharmacy.patients (
   CONSTRAINT patients_pkey PRIMARY KEY (id),
   CONSTRAINT patients_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
+CREATE TABLE pharmacy.pos_operators (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  warehouse_id uuid NOT NULL,
+  full_name text NOT NULL,
+  pin_hash text NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT pos_operators_pkey PRIMARY KEY (id),
+  CONSTRAINT pos_operators_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT pos_operators_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES pharmacy.warehouses(id)
+);
 CREATE TABLE pharmacy.pos_sessions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL,
@@ -131,12 +153,27 @@ CREATE TABLE pharmacy.pos_sessions (
   opening_balance numeric NOT NULL DEFAULT 0,
   closing_balance numeric,
   difference numeric,
-  status text NOT NULL DEFAULT 'OPEN'::text CHECK (status = ANY (ARRAY['OPEN'::text, 'CLOSED'::text])),
+  status text NOT NULL DEFAULT 'OPEN'::text CHECK (status = ANY (ARRAY['PENDING'::text, 'OPEN'::text, 'CLOSED'::text])),
   created_at timestamp with time zone DEFAULT now(),
+  operator_id uuid,
+  terminal_id uuid,
   CONSTRAINT pos_sessions_pkey PRIMARY KEY (id),
   CONSTRAINT pos_sessions_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
   CONSTRAINT pos_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
-  CONSTRAINT pos_sessions_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES pharmacy.warehouses(id)
+  CONSTRAINT pos_sessions_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES pharmacy.warehouses(id),
+  CONSTRAINT pos_sessions_operator_id_fkey FOREIGN KEY (operator_id) REFERENCES pharmacy.pos_operators(id),
+  CONSTRAINT pos_sessions_terminal_id_fkey FOREIGN KEY (terminal_id) REFERENCES pharmacy.pos_terminals(id)
+);
+CREATE TABLE pharmacy.pos_terminals (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  warehouse_id uuid NOT NULL,
+  name text NOT NULL,
+  is_active boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT pos_terminals_pkey PRIMARY KEY (id),
+  CONSTRAINT pos_terminals_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT pos_terminals_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES pharmacy.warehouses(id)
 );
 CREATE TABLE pharmacy.prescription_items (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -266,6 +303,7 @@ CREATE TABLE pharmacy.sale_items (
   unit_price numeric NOT NULL,
   subtotal numeric NOT NULL,
   company_id uuid,
+  prescription_id uuid,
   CONSTRAINT sale_items_pkey PRIMARY KEY (id),
   CONSTRAINT sale_items_sale_id_fkey FOREIGN KEY (sale_id) REFERENCES pharmacy.sales(id),
   CONSTRAINT sale_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES pharmacy.products(id),

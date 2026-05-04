@@ -119,13 +119,111 @@ export const fetchInventoryStock = async (warehouseId = null) => {
 };
 
 // Obtener catálogo de pacientes
-export const fetchPharmacyPatients = async () => {
-  return await getPharmacySchema().from('patients').select('*').order('created_at', { ascending: false });
+export const fetchPharmacyPatients = async (query = '') => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let baseQuery = getPharmacySchema().from('patients').select('*').eq('company_id', companyId);
+  
+  if (query) {
+    baseQuery = baseQuery.or(`full_name.ilike.%${query}%,rut.ilike.%${query}%`);
+  }
+
+  return await baseQuery.order('full_name', { ascending: true }).limit(50);
+};
+
+export const createPharmacyPatient = async (patientData) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('patients')
+    .insert([{ ...patientData, company_id: companyId }])
+    .select()
+    .single();
+};
+
+export const updatePharmacyPatient = async (id, patientData) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('patients')
+    .update({ ...patientData })
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select()
+    .single();
+};
+
+// --- DOCTORES ---
+export const fetchDoctors = async (query = '') => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let baseQuery = getPharmacySchema().from('doctors').select('*').eq('company_id', companyId);
+  
+  if (query) {
+    baseQuery = baseQuery.or(`full_name.ilike.%${query}%,rut.ilike.%${query}%`);
+  }
+
+  return await baseQuery.order('full_name', { ascending: true }).limit(50);
+};
+
+export const createDoctor = async (doctorData) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('doctors')
+    .insert([{ ...doctorData, company_id: companyId }])
+    .select()
+    .single();
+};
+
+export const updateDoctor = async (id, doctorData) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('doctors')
+    .update({ ...doctorData })
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select()
+    .single();
+};
+
+// Obtener recetas pendientes por paciente (puente POS)
+export const fetchPendingPrescriptionsByPatient = async (patientId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('prescriptions')
+    .select('*, patient:patient_id(*)')
+    .eq('company_id', companyId)
+    .eq('patient_id', patientId)
+    .eq('status', 'PENDING')
+    .order('created_at', { ascending: false });
 };
 
 // Obtener todas las recetas médicas
 export const fetchPrescriptions = async () => {
   return await getPharmacySchema().from('prescriptions').select('*, patient:patient_id(*)').order('created_at', { ascending: false });
+};
+
+// Obtener una receta específica por su folio
+export const fetchPrescriptionByFolio = async (folio) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('prescriptions')
+    .select('*, patient:patient_id(*)')
+    .eq('company_id', companyId)
+    .eq('folio_electronico', folio)
+    .single();
 };
 
 // Crear una nueva receta médica con items (Transaccional con Inyección de Company ID)
@@ -141,44 +239,46 @@ export const fetchLocations = async () => {
   return await getPharmacySchema().from('locations').select('*, warehouse:warehouse_id(*)').eq('company_id', companyId).order('name');
 };
 
+export const createQuickPrescription = async (prescriptionData) => {
+  const companyId = await getMyCompanyId();
+  const userId = await getCurrentUserId();
+  if (!companyId) return { error: { message: "No company id" } };
+
+  return await getPharmacySchema()
+    .from('prescriptions')
+    .insert([{ 
+      ...prescriptionData, 
+      company_id: companyId, 
+      created_by: userId,
+      status: 'DISPENSED'
+    }])
+    .select()
+    .single();
+};
+
 export const createPrescriptionWithItems = async (prescriptionData, items) => {
   const schema = getPharmacySchema();
-  
-  // 1. Obtener Company ID para cumplir con RLS
   const companyId = await getMyCompanyId();
-  if (!companyId) {
-    return { error: { message: "No se pudo determinar el Company ID del colaborador activo." } };
-  }
+  if (!companyId) return { error: { message: "No company id" } };
 
-  // 2. Inyectar Company ID en la cabecera
-  const finalHeaderData = {
-    ...prescriptionData,
-    company_id: companyId
-  };
-
-  // 3. Insertar Cabecera
-  const { data: headerData, error: headerError } = await schema
+  const { data: header, error: headerError } = await schema
     .from('prescriptions')
-    .insert([finalHeaderData])
+    .insert([{ ...prescriptionData, company_id: companyId }])
     .select()
     .single();
 
   if (headerError) return { error: headerError };
 
-  // 4. Preparar Items
   const itemsWithHeaderId = items.map(item => ({
     ...item,
-    prescription_id: headerData.id
+    prescription_id: header.id
   }));
 
-  // 5. Insertar Items
   const { data: itemsData, error: itemsError } = await schema
     .from('prescription_items')
     .insert(itemsWithHeaderId);
 
-  if (itemsError) return { error: itemsError, headerId: headerData.id };
-
-  return { data: { header: headerData, items: itemsData }, error: null };
+  return { data: { header, items: itemsData }, error: itemsError };
 };
 
 export const fetchPrescriptionItems = async (prescriptionId) => {
@@ -313,7 +413,8 @@ export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) =>
            batch_id: batch.id,
            quantity: qtyToDeduct,
            unit_price: priceSale,
-           subtotal: qtyToDeduct * priceSale
+           subtotal: qtyToDeduct * priceSale,
+           prescription_id: item.prescription_id || null
         });
       
       if (itemErr) throw itemErr;

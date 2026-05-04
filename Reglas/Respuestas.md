@@ -1,0 +1,5 @@
+"Responde en máximo 100 palabras."
+"Usa 3-6 frases cortas y claras."
+"Sé conciso, directo y evita explicaciones largas."
+"Si aplica, usa viñetas (máximo 3 puntos)."
+"Siempre espera mi siguiente consulta antes de continuar."

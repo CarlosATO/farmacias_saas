@@ -1,7 +1,200 @@
-import React from 'react';
-import { Users, ChevronRight, Search } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Users, ChevronRight, Search, Plus, ArrowLeft, Save, Phone, Mail, Calendar, Edit3 } from 'lucide-react';
+import { fetchPharmacyPatients, createPharmacyPatient, updatePharmacyPatient } from '../api/pharmacyClient';
 
 export default function Pacientes() {
+  const [patients, setPatients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [view, setView] = useState('list'); // 'list' | 'create' | 'edit'
+  const [editingPatient, setEditingPatient] = useState(null);
+  const [formData, setFormData] = useState({ rut: '', full_name: '', phone: '', email: '', birth_date: '', gender: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState(null);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await fetchPharmacyPatients();
+      if (!error) setPatients(data || []);
+    } catch (err) {
+      console.error("Error cargando pacientes:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  const filtered = patients.filter(p => {
+    const term = searchTerm.toLowerCase();
+    return p.full_name?.toLowerCase().includes(term) ||
+           p.rut?.toLowerCase().includes(term) ||
+           (p.phone || '').includes(term);
+  });
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const openCreate = () => {
+    setEditingPatient(null);
+    setFormData({ rut: '', full_name: '', phone: '', email: '', birth_date: '', gender: '' });
+    setFormError(null);
+    setView('create');
+  };
+
+  const openEdit = (patient) => {
+    setEditingPatient(patient);
+    setFormData({
+      rut: patient.rut || '',
+      full_name: patient.full_name || '',
+      phone: patient.phone || '',
+      email: patient.email || '',
+      birth_date: patient.birth_date || '',
+      gender: patient.gender || ''
+    });
+    setFormError(null);
+    setView('edit');
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.rut.trim() || !formData.full_name.trim()) {
+      setFormError('RUT y Nombre son obligatorios.');
+      return;
+    }
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const payload = {
+        rut: formData.rut.trim(),
+        full_name: formData.full_name.trim(),
+        phone: formData.phone.trim() || null,
+        email: formData.email.trim() || null,
+        birth_date: formData.birth_date || null,
+        gender: formData.gender || null
+      };
+
+      if (editingPatient) {
+        await updatePharmacyPatient(editingPatient.id, payload);
+      } else {
+        await createPharmacyPatient(payload);
+      }
+
+      setView('list');
+      loadData();
+    } catch (err) {
+      setFormError(err.message || 'Error al guardar paciente.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── FORM VIEW ──
+  if (view === 'create' || view === 'edit') {
+    const isEdit = view === 'edit';
+    return (
+      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60]">
+        <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
+          <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+            <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('list')}>Directorio de Pacientes</span>
+            <ChevronRight size={12} className="mx-1" />
+            <span className="text-[#4C3073]">{isEdit ? 'Editar Paciente' : 'Nuevo Paciente'}</span>
+          </div>
+          <div className="flex justify-between items-center mt-1">
+            <button onClick={() => setView('list')} className="bg-white border border-gray-300 text-gray-600 hover:bg-gray-50 px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center gap-2">
+              <ArrowLeft size={16} /> Cancelar y Volver
+            </button>
+            <button onClick={handleSubmit} disabled={submitting} className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-2 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 disabled:opacity-50">
+              <Save size={16} /> {submitting ? 'GUARDANDO...' : (isEdit ? 'ACTUALIZAR' : 'GUARDAR PACIENTE')}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-8">
+          <div className="max-w-2xl mx-auto">
+            <div className="bg-white border border-gray-200 shadow-sm rounded-sm p-8 space-y-6">
+              <div className="flex items-center gap-3 border-b border-gray-100 pb-4">
+                <div className="p-2 bg-[#4C3073]/10 rounded">
+                  <Users size={24} className="text-[#4C3073]" />
+                </div>
+                <h2 className="text-lg font-black text-gray-800 uppercase tracking-tight">
+                  {isEdit ? 'Editar Paciente' : 'Nuevo Paciente'}
+                </h2>
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">RUT *</label>
+                    <input type="text" name="rut" value={formData.rut} onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none font-mono"
+                      placeholder="12.345.678-9" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Nombre Completo *</label>
+                    <input type="text" name="full_name" value={formData.full_name} onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none"
+                      placeholder="Juan Pérez" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Teléfono</label>
+                    <input type="text" name="phone" value={formData.phone} onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none"
+                      placeholder="+56912345678" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Email</label>
+                    <input type="email" name="email" value={formData.email} onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none"
+                      placeholder="paciente@mail.com" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Fecha Nacimiento</label>
+                    <input type="date" name="birth_date" value={formData.birth_date} onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Género</label>
+                    <select name="gender" value={formData.gender} onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none">
+                      <option value="">Seleccionar...</option>
+                      <option value="M">Masculino</option>
+                      <option value="F">Femenino</option>
+                      <option value="O">Otro</option>
+                    </select>
+                </div>
+                </div>
+
+                {/* Botones de acción */}
+                <div className="flex justify-end gap-4 pt-4 border-t border-gray-100 mt-6">
+                  <button onClick={() => setView('list')} className="px-8 py-3 border border-gray-300 text-gray-600 hover:bg-gray-100 rounded-sm text-xs font-bold uppercase tracking-wider transition-all">
+                    Cancelar
+                  </button>
+                  <button onClick={handleSubmit} disabled={submitting} className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-8 py-3 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm disabled:opacity-50">
+                    {submitting ? 'GUARDANDO...' : (isEdit ? 'ACTUALIZAR PACIENTE' : 'GUARDAR PACIENTE')}
+                  </button>
+                </div>
+              </div>
+
+              {formError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-sm text-xs font-bold uppercase tracking-widest">{formError}</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── LIST VIEW ──
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] bg-white font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm">
       <div className="border-b border-gray-200 px-4 py-2 bg-white flex flex-col gap-2 shrink-0">
@@ -12,29 +205,81 @@ export default function Pacientes() {
         </div>
         <div className="flex justify-between items-center mt-1">
           <div className="flex gap-2">
-            <button 
-              className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-1.5 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm active:scale-95"
-            >
-              Nuevo Paciente
+            <button onClick={openCreate}
+              className="bg-[#4C3073] hover:bg-[#3d265c] text-white px-6 py-1.5 rounded-sm text-xs font-bold uppercase tracking-wider transition-all shadow-sm active:scale-95 flex items-center gap-1.5">
+              <Plus size={14} /> Nuevo Paciente
             </button>
           </div>
           <div className="relative w-72">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input 
-              type="text" 
-              placeholder="Buscar por RUT o Nombre..." 
-              className="block w-full rounded-sm border-gray-300 border pl-8 pr-3 py-1.5 text-xs focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none transition-all" 
-            />
+            <input type="text" placeholder="Buscar por RUT o Nombre..." value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full rounded-sm border-gray-300 border pl-8 pr-3 py-1.5 text-xs focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none transition-all" />
           </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-gray-50/30 flex items-center justify-center p-8">
-        <div className="bg-white rounded-sm shadow-sm border border-gray-200 p-12 text-center max-w-md w-full">
-            <Users size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-lg font-black text-gray-800 mb-2">Buscando historiales clínicos...</h3>
-            <p className="text-sm text-gray-500">Mantenimiento de perfiles de farmacia en construcción.</p>
-        </div>
+      <div className="flex-1 overflow-auto bg-gray-50/30">
+        {loading ? (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-gray-400 font-bold text-sm">Cargando pacientes...</p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex items-center justify-center h-full p-8">
+            <div className="bg-white rounded-sm shadow-sm border border-gray-200 p-12 text-center max-w-md w-full">
+              <Users size={48} className="mx-auto text-gray-300 mb-4" />
+              <h3 className="text-lg font-black text-gray-800 mb-2">
+                {searchTerm ? 'Sin resultados' : 'Directorio de Pacientes'}
+              </h3>
+              <p className="text-sm text-gray-500">
+                {searchTerm ? `No se encontraron pacientes para "${searchTerm}".` : 'Registra el primer paciente para comenzar.'}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <table className="w-full text-left border-collapse">
+            <thead className="bg-[#f8f9fa] border-b border-gray-200 sticky top-0 z-10">
+              <tr>
+                <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Nombre</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">RUT</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Contacto</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Email</th>
+                <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-right">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white">
+              {filtered.map(p => (
+                <tr key={p.id} className="hover:bg-gray-50 transition-colors group">
+                  <td className="px-4 py-3">
+                    <p className="font-bold text-gray-800">{p.full_name}</p>
+                    {p.gender && <p className="text-[10px] text-gray-400 mt-0.5">{p.gender === 'M' ? 'Masculino' : p.gender === 'F' ? 'Femenino' : 'Otro'}</p>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="font-mono text-sm text-gray-700">{p.rut}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5 text-gray-500">
+                      <Phone size={12} className="text-gray-400" />
+                      <span className="text-xs">{p.phone || '—'}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5 text-gray-500">
+                      <Mail size={12} className="text-gray-400" />
+                      <span className="text-xs truncate max-w-[180px]">{p.email || '—'}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button onClick={() => openEdit(p)}
+                      className="text-[11px] font-bold text-[#4C3073] hover:text-[#3d265c] uppercase tracking-wider flex items-center gap-1 ml-auto">
+                      <Edit3 size={14} /> Editar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

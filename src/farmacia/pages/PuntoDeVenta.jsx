@@ -2,15 +2,20 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Search, Plus, Trash2, ShieldAlert, FlaskConical,
-  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet, Calculator, ArrowLeft, Banknote
+  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet, Calculator, ArrowLeft, Banknote, Receipt
 } from 'lucide-react';
 import {
   fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchPricesByWarehouse,
   fetchPosSessionSummary, verifyPosOperatorPin, closePosSession,
-  fetchPosTerminals, fetchSessionByTerminal, activateSession
+  fetchPosTerminals, fetchSessionByTerminal, activateSession,
+  fetchPharmacyPatients, createPharmacyPatient, createQuickPrescription,
+  fetchPrescriptionByFolio, fetchPrescriptionItems,
+  fetchPendingPrescriptionsByPatient,
+  fetchDoctors, createDoctor
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
+import SearchableSelect from '../components/SearchableSelect';
 
 const billDenominations = [20000, 10000, 5000, 2000, 1000];
 const coinDenominations = [500, 100, 50, 10];
@@ -24,8 +29,15 @@ export default function PuntoDeVenta() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showSearchModal, setShowSearchModal] = useState(false);
-  const [validationModal, setValidationModal] = useState({ isOpen: false, type: null, product: null });
-  const [modalInput, setModalInput] = useState('');
+  const [validationModal, setValidationModal] = useState({ 
+    isOpen: false, 
+    type: null, 
+    product: null,
+    activeTab: 'EXPRESS', // 'LLAMAR' | 'EXPRESS'
+    folioSearch: '',
+    isLoading: false
+  });
+  const [expressFormData, setExpressFormData] = useState({ rut: '', nombre: '', folio: '', patientRut: '', patientNombre: '' });
   const [selectedPrescription, setSelectedPrescription] = useState('');
   const [isProcessingSale, setIsProcessingSale] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
@@ -51,6 +63,15 @@ export default function PuntoDeVenta() {
   const [terminals, setTerminals] = useState([]);
   const [isTerminalSelectionOpen, setIsTerminalSelectionOpen] = useState(false);
   const [activationModal, setActivationModal] = useState({ open: false, pinCode: '' });
+
+  // Gestión de Pacientes
+  const [patients, setPatients] = useState([]);
+  const [selectedPatient, setSelectedPatient] = useState({ id: null, full_name: 'PÚBLICO GENERAL', rut: '1-9' });
+  const [showAddPatientModal, setShowAddPatientModal] = useState(false);
+  const [newPatient, setNewPatient] = useState({ rut: '', full_name: '', phone: '' });
+  const [isSavingPatient, setIsSavingPatient] = useState(false);
+  // Puente inteligente: recetas pendientes del paciente
+  const [pendingRecipesModal, setPendingRecipesModal] = useState({ open: false, prescriptions: [], loading: false });
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
 
@@ -69,12 +90,13 @@ export default function PuntoDeVenta() {
 
     setLoading(true);
     try {
-      const [prodRes, preRes, stockRes, priceRes, sessionRes] = await Promise.all([
+      const [prodRes, preRes, stockRes, priceRes, sessionRes, patientsRes] = await Promise.all([
         fetchPharmacyProducts(),
         fetchPrescriptions(),
         fetchInventoryStock(activeWarehouse.id),
         fetchPricesByWarehouse(activeWarehouse.id),
         fetchSessionByTerminal(terminalId),
+        fetchPharmacyPatients()
       ]);
 
       const prodData = prodRes.data || [];
@@ -82,6 +104,8 @@ export default function PuntoDeVenta() {
       const priceData = priceRes.data || [];
       const preData = preRes.data?.filter(p => p.status === 'PENDING') || [];
       const currentSession = sessionRes.data || null;
+      const patientsData = patientsRes.data || [];
+      setPatients(patientsData);
 
       // ... existing stock and price logic ...
       const stockMapLocal = {};
@@ -165,6 +189,77 @@ export default function PuntoDeVenta() {
     }
   }, [showSearchModal]);
 
+  // ── PUENTE INTELIGENTE: detector de recetas pendientes ─────────────────
+  useEffect(() => {
+    if (!selectedPatient?.id || selectedPatient.id === 'PÚBLICO GENERAL') return;
+    
+    const checkPending = async () => {
+      try {
+        const { data, error } = await fetchPendingPrescriptionsByPatient(selectedPatient.id);
+        if (!error && data && data.length > 0) {
+          setPendingRecipesModal({ open: true, prescriptions: data, loading: false });
+        }
+      } catch (err) {
+        console.error("Error verificando recetas pendientes:", err);
+      }
+    };
+    checkPending();
+  }, [selectedPatient?.id]);
+
+  const handleLoadPendingRecipes = async () => {
+    setPendingRecipesModal(prev => ({ ...prev, loading: true }));
+    try {
+      let updatedCart = [...cart];
+      for (const prescription of pendingRecipesModal.prescriptions) {
+        const { data: items, error } = await fetchPrescriptionItems(prescription.id);
+        if (error || !items) continue;
+        
+        for (const item of items) {
+          const product = item.product;
+          if (!product) continue;
+          
+          // Usar precio desde productos enriquecidos (locales) o fallback al catálogo
+          const enriched = products.find(p => p.id === product.id);
+          const effectivePrice = enriched?.price_sale || Number(product.price_sale ?? product.unit_price ?? 0);
+          const effectiveStock = enriched?.stock_disponible || 0;
+          
+          const existingIdx = updatedCart.findIndex(
+            c => c.id === product.id && c.correlativo_asociado === prescription.folio_electronico
+          );
+          if (existingIdx !== -1) {
+            const newQty = updatedCart[existingIdx].quantity + (item.quantity_prescribed || 1);
+            if (newQty > effectiveStock) {
+              alert(`Stock insuficiente para ${product.name}. Se agregó hasta el disponible (${effectiveStock}).`);
+              updatedCart[existingIdx].quantity = effectiveStock;
+            } else {
+              updatedCart[existingIdx].quantity = newQty;
+            }
+          } else {
+            if ((item.quantity_prescribed || 1) > effectiveStock && effectiveStock <= 0) {
+              alert(`Sin stock disponible para ${product.name}. Se omite.`);
+              continue;
+            }
+            updatedCart.push({
+              ...product,
+              price_sale: effectivePrice,
+              stock_disponible: effectiveStock,
+              quantity: Math.min(item.quantity_prescribed || 1, effectiveStock || 999),
+              prescription_id: prescription.id,
+              correlativo_asociado: prescription.folio_electronico,
+              validation_rut: prescription.prescriber_rut,
+              max_prescription_qty: item.quantity_prescribed || 1
+            });
+          }
+        }
+      }
+      setCart(updatedCart);
+      setPendingRecipesModal({ open: false, prescriptions: [], loading: false });
+    } catch (err) {
+      console.error("Error cargando recetas pendientes:", err);
+      setPendingRecipesModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
   // ── HOTKEYS GLOBALES ────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
@@ -185,9 +280,16 @@ export default function PuntoDeVenta() {
 
     const condition = (product.sale_condition || product.prescription_type || 'VD').toUpperCase();
     if (condition === 'VD' || condition === 'VENTA_LIBRE') { addToCart(product); return; }
-    if (condition === 'R' || condition === 'RECETA_SIMPLE') { setValidationModal({ isOpen: true, type: 'R', product }); setModalInput(''); return; }
+    
+    if (condition === 'R' || condition === 'RECETA_SIMPLE') { 
+      setValidationModal(prev => ({ ...prev, isOpen: true, type: 'R', product, activeTab: 'EXPRESS' })); 
+      setExpressFormData({ rut: '', nombre: '', folio: '', patientRut: '', patientNombre: '' });
+      return; 
+    }
     if (condition === 'RR' || condition === 'RCH' || condition === 'RECETA_RETENIDA' || condition === 'RECETA_CHEQUE') {
-      setValidationModal({ isOpen: true, type: 'RR', product }); setSelectedPrescription(''); return;
+      setValidationModal(prev => ({ ...prev, isOpen: true, type: 'RR', product, activeTab: 'LLAMAR' })); 
+      setSelectedPrescription(''); 
+      return;
     }
     // Default: agregar sin validación
     addToCart(product);
@@ -241,11 +343,24 @@ export default function PuntoDeVenta() {
 
   const setQuantity = (id, val) => {
     const qty = Math.max(1, parseInt(val) || 1);
-    const product = cart.find(item => item.id === id);
+    const item = cart.find(i => i.id === id);
+    if (!item) return;
 
-    if (!canSellQuantity(product, qty)) return;
+    // Límite estricto de dispensación
+    if (item.max_prescription_qty && qty > item.max_prescription_qty) {
+      alert(`No puede vender más de lo indicado en la receta médica (máx. ${item.max_prescription_qty}).`);
+      return;
+    }
 
-    setCart(cart.map(item => item.id === id ? { ...item, quantity: qty } : item));
+    // Validar stock real desde productos enriquecidos
+    const enriched = products.find(p => p.id === id);
+    const availableStock = Number(enriched?.stock_disponible ?? item.stock_disponible ?? 0);
+    if (qty > availableStock) {
+      showInsufficientStockAlert();
+      return;
+    }
+
+    setCart(cart.map(c => c.id === id ? { ...c, quantity: qty } : c));
   };
 
   const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
@@ -253,9 +368,158 @@ export default function PuntoDeVenta() {
   const calculateTotal = () => cart.reduce((acc, item) => acc + (safePrice(item) * Number(item.quantity || 0)), 0);
   const totalItems = cart.reduce((acc, item) => acc + (Number(item.quantity) || 0), 0);
 
+  const handleLlamarReceta = async () => {
+    if (!validationModal.folioSearch) return;
+    setValidationModal(prev => ({ ...prev, isLoading: true }));
+    try {
+      const { data: prescription, error } = await fetchPrescriptionByFolio(validationModal.folioSearch);
+      if (error || !prescription) {
+        alert("No se encontró la receta solicitada.");
+        return;
+      }
+
+      const { data: items, error: itemsError } = await fetchPrescriptionItems(prescription.id);
+      if (itemsError || !items) {
+        alert("Error al recuperar los productos de la receta.");
+        return;
+      }
+
+      // Merge items to cart
+      const newCartItems = items.map(item => ({
+        ...item.product,
+        quantity: item.quantity_prescribed || 1,
+        prescription_id: prescription.id,
+        correlativo_asociado: prescription.folio_electronico,
+        validation_rut: prescription.prescriber_rut
+      }));
+
+      // Append and handle duplicates (if same product with same prescription, merge quantity)
+      let updatedCart = [...cart];
+      newCartItems.forEach(newItem => {
+        const existingIdx = updatedCart.findIndex(c => c.id === newItem.id && c.correlativo_asociado === newItem.correlativo_asociado);
+        if (existingIdx !== -1) {
+          updatedCart[existingIdx].quantity += newItem.quantity;
+        } else {
+          updatedCart.push(newItem);
+        }
+      });
+
+      setCart(updatedCart);
+
+      // Auto-select patient if possible
+      if (prescription.patient) {
+        setSelectedPatient(prescription.patient);
+      }
+
+      setValidationModal({ isOpen: false, type: null, product: null, activeTab: 'EXPRESS', folioSearch: '', isLoading: false });
+      setShowSearchModal(false);
+      alert(`Receta ${prescription.folio_electronico} cargada con éxito (${items.length} productos).`);
+    } catch (err) {
+      console.error("Error llamando receta:", err);
+      alert("Error inesperado al llamar receta.");
+    } finally {
+      setValidationModal(prev => ({ ...prev, isLoading: false }));
+    }
+  };
+
+  const handleExpressValidate = async () => {
+    const { rut, nombre, folio, patientRut, patientNombre } = expressFormData;
+    if (!validationModal.product) return;
+
+    const missing = [];
+    if (!rut.trim()) missing.push('RUT del Médico');
+    if (!nombre.trim()) missing.push('Nombre del Médico');
+    if (!folio.trim()) missing.push('N° de Folio / Receta');
+    if (!patientRut.trim()) missing.push('RUT del Paciente');
+    if (!patientNombre.trim()) missing.push('Nombre del Paciente');
+
+    if (missing.length > 0) {
+      alert(`Campos obligatorios: ${missing.join(', ')}`);
+      return;
+    }
+
+    setValidationModal(prev => ({ ...prev, isLoading: true }));
+    try {
+      // Buscar si el paciente ya existe por RUT
+      const { data: existingPatients } = await fetchPharmacyPatients(patientRut.trim());
+      let patient = existingPatients?.find(p => p.rut === patientRut.trim());
+
+      // Si no existe, crearlo
+      if (!patient) {
+        const { data: newPatient, error: createError } = await createPharmacyPatient({
+          rut: patientRut.trim(),
+          full_name: patientNombre.trim()
+        });
+        if (createError) throw createError;
+        patient = newPatient;
+        setPatients(prev => [patient, ...prev]);
+      }
+
+      // Alimentar tabla de doctores (upsert por RUT)
+      const { data: existingDoctors } = await fetchDoctors(rut.trim());
+      if (!existingDoctors?.find(d => d.rut === rut.trim())) {
+        const { error: doctorError } = await createDoctor({
+          rut: rut.trim(),
+          full_name: nombre.trim()
+        });
+        if (doctorError) console.warn("No se pudo registrar médico:", doctorError);
+      }
+
+      setSelectedPatient(patient);
+      setValidationModal(prev => ({ ...prev, isLoading: false }));
+
+      addToCart(validationModal.product, {
+        es_receta_express: true,
+        validation_rut: rut.trim(),
+        prescriber_name: nombre.trim(),
+        datos_medico: {
+          rut: rut.trim(),
+          nombre: nombre.trim(),
+          folio: folio.trim()
+        }
+      });
+    } catch (err) {
+      console.error("Error en validación express:", err);
+      alert("Error al registrar paciente: " + (err.message || err));
+      setValidationModal(prev => ({ ...prev, isLoading: false }));
+    }
+  };
+
   const handleCheckout = () => {
     if (cart.length === 0 || isProcessingSale) return;
+
+    // Validación: Si hay productos con receta, debe haber un paciente real
+    const needsPrescription = cart.some(item => {
+      const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
+      return condition !== 'VD' && condition !== 'VENTA_LIBRE';
+    });
+
+    if (needsPrescription && !selectedPatient.id) {
+      alert('Esta venta contiene productos que requieren receta médica. Debe seleccionar o registrar un Paciente real para continuar.');
+      return;
+    }
+
     setShowCheckoutModal(true);
+  };
+
+  const handleSavePatient = async () => {
+    if (!newPatient.rut || !newPatient.full_name) {
+      alert('RUT y Nombre son obligatorios.');
+      return;
+    }
+    setIsSavingPatient(true);
+    try {
+      const { data, error } = await createPharmacyPatient(newPatient);
+      if (error) throw error;
+      setPatients(prev => [data, ...prev]);
+      setSelectedPatient(data);
+      setShowAddPatientModal(false);
+      setNewPatient({ rut: '', full_name: '', phone: '' });
+    } catch (err) {
+      alert('Error al guardar paciente: ' + err.message);
+    } finally {
+      setIsSavingPatient(false);
+    }
   };
 
   const handleQuickCashOut = async () => {
@@ -355,22 +619,43 @@ export default function PuntoDeVenta() {
   const confirmSale = async (modalSaleHeader) => {
     setIsProcessingSale(true);
     try {
+      // 1. Procesar Recetas si es necesario
+      const updatedCart = [...cart];
+      
+      for (let i = 0; i < updatedCart.length; i++) {
+        const item = updatedCart[i];
+        const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
+        
+        // Si el item requiere receta y NO tiene una vinculada (o es Receta Simple)
+        if (condition !== 'VD' && condition !== 'VENTA_LIBRE' && !item.prescription_id) {
+          const prescRes = await createQuickPrescription({
+            patient_id: selectedPatient.id,
+            prescriber_rut: item.validation_rut || item.datos_medico?.rut || 'POR_DEFINIR',
+            prescriber_name: item.prescriber_name || item.datos_medico?.nombre || 'MÉDICO GENERAL',
+            folio_electronico: item.datos_medico?.folio || `POS-${Date.now()}-${i}`
+          });
+          
+          if (prescRes.data) {
+            updatedCart[i] = { ...item, prescription_id: prescRes.data.id };
+          }
+        }
+      }
+
       const saleHeader = {
         ...modalSaleHeader,
-        // Enlazar paciente si viene de una receta
-        patient_id: cart.find(i => i.patient_id)?.patient_id || null,
-        prescription_id: cart.find(i => i.prescription_id)?.prescription_id || null
+        patient_id: selectedPatient.id
       };
 
-      const sale = await createSaleWithItems(saleHeader, cart, activeWarehouse.id);
-      alert(`Venta #${sale.id.slice(0,8)} procesada. Stock descontado por FEFO.`);
+      const sale = await createSaleWithItems(saleHeader, updatedCart, activeWarehouse.id);
+      alert(`Venta #${sale.id.slice(0,8)} procesada correctamente.`);
       
       setCart([]);
       setShowCheckoutModal(false);
+      setSelectedPatient({ id: null, full_name: 'PÚBLICO GENERAL', rut: '1-9' });
       loadInitialData();
     } catch (err) {
-      console.error("ERROR CRÍTICO BD:", err);
-      alert("Error BD: " + (err.message || JSON.stringify(err)));
+      console.error("ERROR CRÍTICO VENTA:", err);
+      alert("Error en la venta: " + (err.message || "Consulte logs"));
     } finally { 
       setIsProcessingSale(false); 
     }
@@ -417,12 +702,39 @@ export default function PuntoDeVenta() {
         <div className="flex items-center gap-4">
           <div className="p-2.5 bg-emerald-500 rounded-xl"><ShoppingCart size={22} /></div>
           <div>
-            <h1 className="text-lg font-black tracking-tight uppercase">Terminal de Venta</h1>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Validación ISP · Modo Teclado</p>
+            <h1 className="text-lg font-black tracking-tight uppercase leading-none">Terminal de Venta</h1>
+            <div className="flex items-center gap-2 mt-1">
+               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest shrink-0">Venta a:</span>
+               <div className="flex items-center gap-1">
+                  <SearchableSelect 
+                    className="w-64"
+                    placeholder="PÚBLICO GENERAL"
+                    options={[
+                      { value: null, label: 'PÚBLICO GENERAL', subLabel: '1-9' },
+                      ...patients.map(p => ({ value: p.id, label: p.full_name, subLabel: p.rut }))
+                    ]}
+                    value={selectedPatient.id}
+                    onChange={(val) => {
+                      if (val === null) setSelectedPatient({ id: null, full_name: 'PÚBLICO GENERAL', rut: '1-9' });
+                      else {
+                        const p = patients.find(pat => pat.id === val);
+                        if (p) setSelectedPatient(p);
+                      }
+                    }}
+                  />
+                  <button 
+                    onClick={() => setShowAddPatientModal(true)}
+                    className="p-2 bg-slate-800 hover:bg-emerald-600 text-white rounded-lg transition-colors shadow-sm"
+                    title="Nuevo Paciente"
+                  >
+                    <Plus size={16} />
+                  </button>
+               </div>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-6">
-          <div className={`hidden lg:flex items-center gap-2 rounded-xl border px-4 py-2 text-[11px] font-black uppercase ${activeSession?.status === 'OPEN' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
+          <div className={`hidden xl:flex items-center gap-2 rounded-xl border px-4 py-2 text-[11px] font-black uppercase ${activeSession?.status === 'OPEN' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
             <Wallet size={14} />
             {activeSession?.status === 'OPEN' ? `Caja abierta · ${activeSession.operator?.full_name}` : 'Caja cerrada'}
           </div>
@@ -444,11 +756,6 @@ export default function PuntoDeVenta() {
               Cerrar Turno
             </button>
           )}
-          <div className="hidden md:flex items-center gap-3 text-[10px] text-slate-500 font-bold">
-            <span className="bg-slate-800 px-2 py-1 rounded font-mono">F1</span> Buscar
-            <span className="bg-slate-800 px-2 py-1 rounded font-mono">F2</span> Cobrar
-            <span className="bg-slate-800 px-2 py-1 rounded font-mono">ESC</span> Cerrar
-          </div>
           <div className="bg-slate-800 border border-slate-700 px-4 py-2 rounded-xl flex items-center gap-2">
             <MapPin size={14} className="text-emerald-400" />
             <div className="flex flex-col">
@@ -496,8 +803,12 @@ export default function PuntoDeVenta() {
                   <td className="px-6 py-4">
                     <span className="font-bold text-slate-800 text-sm block">{item.name}</span>
                     <span className="text-[11px] text-slate-400 italic">{item.dci || 'Sin DCI'}</span>
-                    {item.validation_rut && <span className="block text-[10px] text-yellow-600 font-black mt-0.5">RUT DR: {item.validation_rut}</span>}
-                    {item.prescription_id && <span className="block text-[10px] text-red-600 font-black mt-0.5">RECETA: #{item.prescription_id.slice(0,8)}</span>}
+                    {item.validation_rut && <span className="block text-[10px] text-yellow-600 font-black mt-0.5 uppercase tracking-tighter">RUT DR: {item.validation_rut}</span>}
+                    {(item.prescription_id || item.correlativo_asociado) && (
+                      <span className="block text-[10px] text-red-600 font-black mt-0.5 uppercase tracking-tighter">
+                        RECETA: {item.correlativo_asociado || `#${item.prescription_id?.slice(0,8)}`}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-4 text-center text-sm font-bold text-slate-500">{fmtCLP(safePrice(item))}</td>
                   <td className="px-4 py-4 text-center">
@@ -638,60 +949,147 @@ export default function PuntoDeVenta() {
       {validationModal.isOpen && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-4">
           <div className={`bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border-t-8 ${validationModal.type === 'RR' ? 'border-red-500' : 'border-yellow-500'}`}>
-            <div className="p-8">
-              <div className="flex justify-center mb-6">
-                <div className={`p-4 rounded-full ${validationModal.type === 'RR' ? 'bg-red-50 text-red-500' : 'bg-yellow-50 text-yellow-500'}`}>
-                  {validationModal.type === 'RR' ? <ShieldAlert size={48} /> : <Stethoscope size={48} />}
-                </div>
+            <div className="p-0">
+              {/* TABS HEADER */}
+              <div className="flex bg-slate-50 border-b border-slate-100">
+                <button 
+                  onClick={() => setValidationModal(prev => ({ ...prev, activeTab: 'LLAMAR' }))}
+                  className={`flex-1 py-4 text-[11px] font-black uppercase tracking-widest transition-all ${validationModal.activeTab === 'LLAMAR' ? 'bg-white text-emerald-600 border-b-2 border-emerald-500' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                  Llamar Receta
+                </button>
+                <button 
+                  onClick={() => setValidationModal(prev => ({ ...prev, activeTab: 'EXPRESS' }))}
+                  className={`flex-1 py-4 text-[11px] font-black uppercase tracking-widest transition-all ${validationModal.activeTab === 'EXPRESS' ? 'bg-white text-[#4C3073] border-b-2 border-[#4C3073]' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                  Ingreso Express
+                </button>
               </div>
-              <div className="text-center space-y-2 mb-8">
-                <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">
-                  {validationModal.type === 'RR' ? 'Bloqueo Legal: Receta Retenida' : 'Aviso: Receta Simple'}
-                </h3>
-                <p className="text-sm text-slate-500 leading-relaxed italic">
-                  El medicamento <span className="font-black text-slate-700 underline">{validationModal.product?.name}</span> exige verificación ISP.
-                </p>
+
+              <div className="p-8">
+                {validationModal.activeTab === 'LLAMAR' ? (
+                  <div className="space-y-6">
+                    <div className="flex justify-center mb-2">
+                      <div className="p-4 rounded-full bg-emerald-50 text-emerald-500">
+                        <Receipt size={48} />
+                      </div>
+                    </div>
+                    <div className="text-center space-y-1">
+                      <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Buscar Receta</h3>
+                      <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">Ingresa el Correlativo</p>
+                    </div>
+                    <div className="space-y-4">
+                      <input 
+                        type="text" 
+                        placeholder="REC-10045" 
+                        autoFocus
+                        className="w-full text-center py-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-mono font-bold text-xl"
+                        value={validationModal.folioSearch}
+                        onChange={(e) => setValidationModal(prev => ({ ...prev, folioSearch: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleLlamarReceta(); }}
+                      />
+                      <div className="grid grid-cols-2 gap-4">
+                        <button 
+                          onClick={() => setValidationModal({ ...validationModal, isOpen: false })}
+                          className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          onClick={handleLlamarReceta}
+                          disabled={!validationModal.folioSearch || validationModal.isLoading}
+                          className="py-3 bg-emerald-600 text-white rounded-xl font-black shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                        >
+                          {validationModal.isLoading ? <Loader2 size={16} className="animate-spin"/> : 'BUSCAR Y AGREGAR'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    <div className="flex justify-center mb-2">
+                      <div className="p-4 rounded-full bg-yellow-50 text-yellow-500">
+                        <Stethoscope size={48} />
+                      </div>
+                    </div>
+                    <div className="text-center space-y-2">
+                      <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Receta Simple</h3>
+                      <p className="text-[11px] font-black text-[#4C3073] uppercase bg-purple-50 py-2 px-4 rounded-xl inline-block">
+                        Autorizando producto: <span className="text-slate-800">{validationModal.product?.name}</span>
+                      </p>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">RUT del Médico</label>
+                        <input type="text" placeholder="Ej: 12.345.678-9" autoFocus
+                          className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] transition-all font-mono font-bold text-sm"
+                          value={expressFormData.rut}
+                          onChange={(e) => setExpressFormData(prev => ({ ...prev, rut: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Nombre del Médico</label>
+                        <input type="text" placeholder="Dr. Juan Pérez"
+                          className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] transition-all font-bold text-sm"
+                          value={expressFormData.nombre}
+                          onChange={(e) => setExpressFormData(prev => ({ ...prev, nombre: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">N° de Folio / Receta</label>
+                        <input type="text" placeholder="Ej: REC-10045"
+                          className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] transition-all font-mono font-bold text-sm"
+                          value={expressFormData.folio}
+                          onChange={(e) => setExpressFormData(prev => ({ ...prev, folio: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleExpressValidate(); }}
+                        />
+                      </div>
+                      {/* --- SECCIÓN PACIENTE --- */}
+                      <div className="border-t border-slate-100 pt-4">
+                        <h4 className="text-[10px] font-black text-slate-800 uppercase mb-3 tracking-widest text-center">Datos del Paciente</h4>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">RUT del Paciente</label>
+                            <input type="text" placeholder="Ej: 12.345.678-9"
+                              className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-mono font-bold text-sm"
+                              value={expressFormData.patientRut}
+                              onChange={(e) => setExpressFormData(prev => ({ ...prev, patientRut: e.target.value }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Nombre del Paciente</label>
+                            <input type="text" placeholder="Ej: Juan Pérez"
+                              className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-bold text-sm"
+                              value={expressFormData.patientNombre}
+                              onChange={(e) => setExpressFormData(prev => ({ ...prev, patientNombre: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleExpressValidate(); }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <button 
+                          onClick={() => setValidationModal({ ...validationModal, isOpen: false })}
+                          className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          onClick={handleExpressValidate}
+                          className="py-3 bg-[#4C3073] text-white rounded-xl font-black shadow-lg hover:brightness-110 transition-all"
+                        >
+                          VALIDAR Y AGREGAR
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-              {validationModal.type === 'R' && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest text-center">RUT Médico o Autorización QF</label>
-                    <input type="text" placeholder="Ej: 12.345.678-9" autoFocus
-                      className="w-full text-center py-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-yellow-500 transition-all font-mono font-bold"
-                      value={modalInput} onChange={(e) => setModalInput(e.target.value)} />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <button onClick={() => setValidationModal({ isOpen: false, type: null, product: null })} className="py-3 font-bold text-slate-400 hover:text-slate-600">Cancelar</button>
-                    <button onClick={() => addToCart(validationModal.product, { validation_rut: modalInput || 'Dato Omitido' })}
-                      className="py-3 bg-yellow-500 text-white rounded-xl font-black shadow-lg shadow-yellow-100 hover:bg-yellow-600 transition-all">AGREGAR</button>
-                  </div>
-                </div>
-              )}
-              {validationModal.type === 'RR' && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest text-center">Folio de Receta Electrónica Activa</label>
-                    <select className="w-full py-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-red-500 transition-all font-bold text-slate-700 text-center"
-                      value={selectedPrescription} onChange={(e) => setSelectedPrescription(e.target.value)}>
-                      <option value="">-- Buscar Folio Pendiente --</option>
-                      {prescriptions.map(pres => (
-                        <option key={pres.id} value={pres.id}>Folio: {pres.folio_electronico} ({pres.patient?.first_name})</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 pt-4">
-                    <button onClick={() => setValidationModal({ isOpen: false, type: null, product: null })} className="py-3 font-bold text-slate-400 hover:text-slate-600">Cancelar</button>
-                    <button disabled={!selectedPrescription}
-                      onClick={() => addToCart(validationModal.product, { prescription_id: selectedPrescription })}
-                      className="py-3 bg-red-600 text-white rounded-xl font-black shadow-lg shadow-red-100 hover:bg-red-700 disabled:opacity-20 transition-all">VALIDAR Y AGREGAR</button>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="bg-slate-50 py-3 text-center border-t border-slate-100">
-              <span className="text-[10px] font-black text-slate-400 flex items-center justify-center gap-2">
-                <FlaskConical size={12}/> VIGILANCIA SANITARIA ACTIVA
-              </span>
+              <div className="bg-slate-50 py-3 text-center border-t border-slate-100">
+                <span className="text-[10px] font-black text-slate-400 flex items-center justify-center gap-2">
+                  <FlaskConical size={12}/> VIGILANCIA SANITARIA ACTIVA
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -747,6 +1145,127 @@ export default function PuntoDeVenta() {
                 <button type="button" onClick={() => setQuickCashModal({ open: false, amount: '', reason: '' })} className="rounded-xl border border-gray-300 px-4 py-2.5 text-[11px] font-black uppercase text-gray-700">Cancelar</button>
                 <button type="button" onClick={handleQuickCashOut} disabled={isProcessingSale} className="rounded-xl bg-[#4C3073] px-4 py-2.5 text-[11px] font-black uppercase text-white disabled:opacity-40">
                   {isProcessingSale ? 'Guardando...' : 'Registrar Retiro'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: REGISTRO RÁPIDO PACIENTE */}
+      {showAddPatientModal && (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border-t-8 border-emerald-500">
+            <div className="p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-3 bg-emerald-50 text-emerald-600 rounded-2xl"><Plus size={24}/></div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Registro de Paciente</h3>
+                  <p className="text-xs text-slate-400 font-bold uppercase">Acceso rápido desde POS</p>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">RUT del Paciente</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-bold"
+                    placeholder="Ej: 12.345.678-9"
+                    value={newPatient.rut}
+                    onChange={e => setNewPatient({...newPatient, rut: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">Nombre Completo</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-bold"
+                    placeholder="Ej: Juan Pérez"
+                    value={newPatient.full_name}
+                    onChange={e => setNewPatient({...newPatient, full_name: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">Teléfono (Opcional)</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-bold"
+                    placeholder="Ej: +56912345678"
+                    value={newPatient.phone}
+                    onChange={e => setNewPatient({...newPatient, phone: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 mt-8">
+                <button 
+                  onClick={() => setShowAddPatientModal(false)}
+                  className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={handleSavePatient}
+                  disabled={isSavingPatient}
+                  className="py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                >
+                  {isSavingPatient ? <Loader2 size={18} className="animate-spin"/> : 'GUARDAR'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: RECETAS PENDIENTES DEL PACIENTE (Puente Inteligente) */}
+      {pendingRecipesModal.open && (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border-t-8 border-[#4C3073]">
+            <div className="p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-3 bg-purple-50 text-[#4C3073] rounded-2xl"><ShieldAlert size={24}/></div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Recetas Pendientes</h3>
+                  <p className="text-xs text-slate-400 font-bold uppercase mt-1">
+                    {selectedPatient?.full_name} tiene {pendingRecipesModal.prescriptions.length} receta(s) pre-ingresada(s)
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 max-h-60 overflow-y-auto mb-6">
+                {pendingRecipesModal.prescriptions.map(p => (
+                  <div key={p.id} className="flex items-center justify-between p-3 bg-purple-50 border border-purple-100 rounded-xl">
+                    <div>
+                      <p className="font-black text-slate-800 text-sm">{p.folio_electronico}</p>
+                      <p className="text-[10px] text-slate-500 font-bold uppercase">
+                        Dr. {p.prescriber_name} · {new Date(p.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-black bg-yellow-200 text-yellow-800 px-2 py-1 rounded-md uppercase">
+                      {p.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-sm text-slate-500 italic text-center mb-4">
+                Se cargarán los productos al carrito sin borrar lo ya escaneado.
+              </p>
+
+              <div className="grid grid-cols-2 gap-4">
+                <button
+                  onClick={() => setPendingRecipesModal({ open: false, prescriptions: [], loading: false })}
+                  className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
+                >
+                  Ignorar
+                </button>
+                <button
+                  onClick={handleLoadPendingRecipes}
+                  disabled={pendingRecipesModal.loading}
+                  className="py-3 bg-[#4C3073] text-white rounded-xl font-black shadow-lg hover:brightness-110 transition-all flex items-center justify-center gap-2"
+                >
+                  {pendingRecipesModal.loading ? <Loader2 size={16} className="animate-spin"/> : 'CARGAR RECETAS'}
                 </button>
               </div>
             </div>

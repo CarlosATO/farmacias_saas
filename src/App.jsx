@@ -7,6 +7,7 @@ const FarmaciaDashboard = lazy(() => import('./farmacia/pages/FarmaciaDashboard'
 const InventarioMedico = lazy(() => import('./farmacia/pages/InventarioMedico'));
 const Recetas = lazy(() => import('./farmacia/pages/Recetas'));
 const Pacientes = lazy(() => import('./farmacia/pages/Pacientes'));
+const Medicos = lazy(() => import('./farmacia/pages/Medicos'));
 const PuntoDeVenta = lazy(() => import('./farmacia/pages/PuntoDeVenta'));
 const OrdenesCompra = lazy(() => import('./farmacia/pages/OrdenesCompra'));
 const ProveedoresMedicos = lazy(() => import('./modules/farmacia/pages/ProveedoresMedicos'));
@@ -92,6 +93,7 @@ export default function App() {
             <Route path="inventario" element={<Suspense fallback={<PageLoader />}><InventarioMedico /></Suspense>} />
             <Route path="recetas" element={<Suspense fallback={<PageLoader />}><Recetas /></Suspense>} />
             <Route path="pacientes" element={<Suspense fallback={<PageLoader />}><Pacientes /></Suspense>} />
+            <Route path="medicos" element={<Suspense fallback={<PageLoader />}><Medicos /></Suspense>} />
             <Route path="pos" element={<Suspense fallback={<PageLoader />}><PuntoDeVenta /></Suspense>} />
             <Route path="logistica" element={<Suspense fallback={<PageLoader />}><OrdenesCompra /></Suspense>} />
             <Route path="administracion/proveedores" element={<Suspense fallback={<PageLoader />}><ProveedoresMedicos /></Suspense>} />
