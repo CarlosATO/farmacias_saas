@@ -212,8 +212,6 @@ export default function GestorUbicaciones() {
                 });
             }
 
-            console.log(`Renaming ${prefixLocations.length} locations from "${oldPrefix}" to "${trimmedNewPrefix}"`);
-
             // Prepare updates
             const updatePromises = prefixLocations.map(async (loc) => {
                 // Ensure we only replace the prefix at the start
@@ -229,7 +227,6 @@ export default function GestorUbicaciones() {
             });
 
             await Promise.all(updatePromises);
-            console.log("Bulk rename completed successfully");
             
             setEditingPrefix(null);
             setNewPrefixValue('');

@@ -37,3 +37,4 @@ El diseño debe evitar abrir modales. Siempre necesitamos que todo se abra en pa
    * Al recibir una Orden de Compra, el usuario solo selecciona el Nivel 1 (Local). El sistema inyecta el inventario automáticamente en el Nivel 2 (`QUARANTINE` de ese Local).
 3. **Integridad Referencial (Protección de Borrado):**
    * Un Local o Bodega NO puede ser eliminado si existe algún registro asociado en `inventory_batches` (stock) o `inventory_movements` (Kardex histórico).
+

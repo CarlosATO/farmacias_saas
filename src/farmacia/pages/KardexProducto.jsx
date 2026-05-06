@@ -148,12 +148,11 @@ export default function KardexProducto() {
 
         const { data: locs } = await schema
           .from('locations')
-          .select('id, warehouse_id')
-          .eq('company_id', companyId);
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('warehouse_id', activeWarehouse.id);
         
-        const warehouseLocationIds = (locs || [])
-          .filter(l => l.warehouse_id === activeWarehouse.id)
-          .map(l => l.id);
+        const warehouseLocationIds = (locs || []).map(l => l.id);
 
         if (warehouseLocationIds.length === 0) {
           if (!cancelled) setRows([]);

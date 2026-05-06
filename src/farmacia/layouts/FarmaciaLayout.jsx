@@ -87,10 +87,11 @@ const RIBBON_TABS = [
     id: 'configuracion',
     label: 'Configuracion',
     type: 'group',
-    match: ['/sucursales', '/mapa-logistico', '/operadores-pos'],
+    match: ['/sucursales', '/mapa-logistico', '/operadores-pos', '/auditoria'],
     items: [
       { to: '/sucursales', label: 'Sucursales', icon: Building2, match: ['/sucursales'] },
       { to: '/operadores-pos', label: 'Operadores POS', icon: User, match: ['/operadores-pos'] },
+      { to: '/auditoria', label: 'Auditoria', icon: FileText, match: ['/auditoria'] },
       { to: '/mapa-logistico', label: 'Ubicaciones', icon: MapPin, match: ['/mapa-logistico'] },
       { label: 'SII', icon: Settings, disabled: true },
     ],
@@ -149,7 +150,7 @@ export default function FarmaciaLayout() {
     } catch (error) {
       console.error('Error cerrando sesion:', error);
     } finally {
-      window.location.href = 'http://localhost:3000/login';
+      window.location.href = import.meta.env.VITE_PORTAL_URL || 'http://localhost:3000/login';
     }
   };
 

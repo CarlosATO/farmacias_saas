@@ -3,6 +3,30 @@ import { supabase } from '../../api/supabaseClient';
 // Helper para apuntar siempre al esquema 'pharmacy'
 export const getPharmacySchema = () => supabase.schema('pharmacy');
 
+export const logAuditEvent = async (eventType, description, metadata = {}) => {
+  try {
+    const cleanMetadata = Object.fromEntries(
+      Object.entries(metadata || {}).filter(([, value]) => value !== undefined)
+    );
+
+    const { data, error } = await getPharmacySchema().rpc('log_audit_event', {
+      p_event_type: eventType,
+      p_description: description,
+      p_metadata: cleanMetadata,
+    });
+
+    if (error) {
+      console.warn('Auditoria no registrada:', eventType, error.message || error);
+      return { data: null, error };
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.warn('Auditoria no registrada:', eventType, error.message || error);
+    return { data: null, error };
+  }
+};
+
 /**
  * Obtiene el ID de la compañía vinculada al usuario autenticado.
  * Busca en la tabla public.company_users.
@@ -22,6 +46,197 @@ export const getMyCompanyId = async () => {
     return null;
   }
   return data.company_id;
+};
+
+export const fetchAuditLogs = async (filters = {}) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id"), count: 0 };
+
+  const limit = Number(filters.limit || 50);
+  const page = Math.max(1, Number(filters.page || 1));
+  const offset = (page - 1) * limit;
+  const startDate = filters.startDate || filters.dateFrom;
+  const endDate = filters.endDate || filters.dateTo;
+  const eventType = (filters.eventType || '').trim();
+  const userId = (filters.userId || '').trim();
+
+  const startAt = startDate ? new Date(`${startDate}T00:00:00`).toISOString() : null;
+  const endAt = endDate ? new Date(`${endDate}T23:59:59.999`).toISOString() : null;
+
+  const { data, error } = await getPharmacySchema().rpc('fetch_audit_logs', {
+    p_start_at: startAt,
+    p_end_at: endAt,
+    p_event_type: eventType || null,
+    p_user_id: userId || null,
+    p_limit: limit,
+    p_offset: offset,
+  });
+
+  if (error || !data) {
+    return { data: [], error, count: 0 };
+  }
+
+  // Fetch operators to resolve user names from POS operators
+  const operatorIds = [...new Set(data.map(log => log.metadata?.operator_id).filter(Boolean))];
+  let operatorsById = {};
+  
+  if (operatorIds.length > 0) {
+    const { data: operators } = await getPharmacySchema()
+      .from('pos_operators')
+      .select('id, full_name')
+      .in('id', operatorIds);
+    if (operators) {
+      operatorsById = Object.fromEntries(operators.map(op => [op.id, op.full_name]));
+    }
+  }
+
+  const enrichedData = data.map(log => {
+    let resolvedName = 'Usuario no identificado';
+    if (log.metadata?.operator_id && operatorsById[log.metadata.operator_id]) {
+      resolvedName = operatorsById[log.metadata.operator_id];
+    }
+    return {
+      ...log,
+      user_name: resolvedName,
+    };
+  });
+
+  return {
+    data: enrichedData,
+    error: null,
+    count: data?.[0]?.total_count ? Number(data[0].total_count) : 0,
+  };
+};
+
+export const fetchAuditLogDetail = async (metadata = {}) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  const schema = getPharmacySchema();
+  const items = Array.isArray(metadata.items) ? metadata.items : [];
+  const productIds = [...new Set(items.map(item => item.product_id).filter(Boolean))];
+  const prescriptionIds = [...new Set([
+    metadata.prescription_id,
+    ...(Array.isArray(metadata.prescription_ids) ? metadata.prescription_ids : []),
+    ...items.map(item => item.prescription_id),
+  ].filter(Boolean))];
+
+  const detail = {
+    sale: null,
+    operator: null,
+    prescription: null,
+    session: null,
+    productsById: {},
+    prescriptionsById: {},
+  };
+
+  try {
+    const requests = [];
+
+    if (metadata.warehouse_id) {
+      requests.push(
+        schema
+          .from('warehouses')
+          .select('id, name')
+          .eq('company_id', companyId)
+          .eq('id', metadata.warehouse_id)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) throw error;
+            detail.warehouse = data || null;
+          })
+      );
+    }
+
+    if (metadata.operator_id) {
+      requests.push(
+        schema
+          .from('pos_operators')
+          .select('id, full_name')
+          .eq('company_id', companyId)
+          .eq('id', metadata.operator_id)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) throw error;
+            detail.operator = data || null;
+          })
+      );
+    }
+
+    if (metadata.sale_id) {
+      requests.push(
+        schema
+          .from('sales')
+          .select('id, document_number')
+          .eq('company_id', companyId)
+          .eq('id', metadata.sale_id)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) throw error;
+            detail.sale = data || null;
+          })
+      );
+    }
+
+    if (metadata.session_id) {
+      requests.push(
+        schema
+          .from('pos_sessions')
+          .select('id, start_time, end_time, operator:operator_id(full_name)')
+          .eq('company_id', companyId)
+          .eq('id', metadata.session_id)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) throw error;
+            detail.session = data || null;
+          })
+      );
+    }
+
+    if (productIds.length > 0) {
+      requests.push(
+        schema
+          .from('products')
+          .select('id, name, barcode, dci')
+          .eq('company_id', companyId)
+          .in('id', productIds)
+          .then(({ data, error }) => {
+            if (error) throw error;
+            const productsMap = Object.fromEntries((data || []).map(product => [product.id, product]));
+            detail.productsById = productsMap;
+            // Mapear cada item
+            if (Array.isArray(metadata.items)) {
+              metadata.items.forEach(item => {
+                if (item.product_id) {
+                  item.product_name = productsMap[item.product_id]?.name || 'Producto no encontrado';
+                }
+              });
+            }
+          })
+      );
+    }
+
+    if (prescriptionIds.length > 0) {
+      requests.push(
+        schema
+          .from('prescriptions')
+          .select('id, folio_electronico, patient:patient_id(full_name, rut)')
+          .eq('company_id', companyId)
+          .in('id', prescriptionIds)
+          .then(({ data, error }) => {
+            if (error) throw error;
+            detail.prescriptionsById = Object.fromEntries((data || []).map(prescription => [prescription.id, prescription]));
+            detail.prescription = metadata.prescription_id ? detail.prescriptionsById[metadata.prescription_id] || null : null;
+          })
+      );
+    }
+
+    await Promise.all(requests);
+    return { data: detail, error: null };
+  } catch (error) {
+    console.warn('No se pudo enriquecer detalle de auditoria:', error.message || error);
+    return { data: detail, error };
+  }
 };
 
 // Función base para obtener productos del inventario médico (Catálogo Maestro)
@@ -68,11 +283,17 @@ export const updateProductPrice = async (productId, warehouseId, newPrice) => {
     console.error("[product_prices] Error BD Detalle:", error?.message, error?.details, error?.hint);
     return { error };
   }
+
+  await logAuditEvent('PRODUCT_PRICE_UPDATED', 'Precio de producto actualizado', {
+    product_id: productId,
+    warehouse_id: warehouseId,
+    amount: Number(newPrice || 0),
+  });
+
   return { error: null };
 };
 
 // ── Kardex: calcula el saldo actual tras un movimiento y lo guarda ────────────
-// Llama a esta función DESPUÉS de actualizar inventory_batches en cada movimiento.
 export const calculateBalanceAfter = async (schema, productId, locationId, movementId) => {
   try {
     // Sumar todas las cantidades del producto en esa ubicación
@@ -119,55 +340,75 @@ export const fetchInventoryStock = async (warehouseId = null) => {
 };
 
 // Obtener catálogo de pacientes
-export const fetchPharmacyPatients = async (query = '') => {
+export const normalizeRut = (rut) => rut?.replace(/\./g, '').toLowerCase().trim() || '';
+
+export const fetchPharmacyPatients = async (query = '', limit = 10) => {
   const companyId = await getMyCompanyId();
   if (!companyId) return { data: [], error: new Error("No company id") };
 
+  const normalizedQ = normalizeRut(query);
   let baseQuery = getPharmacySchema().from('patients').select('*').eq('company_id', companyId);
   
-  if (query) {
-    baseQuery = baseQuery.or(`full_name.ilike.%${query}%,rut.ilike.%${query}%`);
+  if (normalizedQ) {
+    baseQuery = baseQuery.or(`full_name.ilike.%${query}%,rut.ilike.%${normalizedQ}%`);
   }
 
-  return await baseQuery.order('full_name', { ascending: true }).limit(50);
+  return await baseQuery.order('full_name', { ascending: true }).limit(limit);
 };
 
 export const createPharmacyPatient = async (patientData) => {
   const companyId = await getMyCompanyId();
   if (!companyId) return { data: null, error: new Error("No company id") };
 
-  return await getPharmacySchema()
+  const result = await getPharmacySchema()
     .from('patients')
     .insert([{ ...patientData, company_id: companyId }])
     .select()
     .single();
+
+  if (!result.error && result.data) {
+    await logAuditEvent('PATIENT_CREATED', 'Paciente creado', {
+      patient_id: result.data.id,
+    });
+  }
+
+  return result;
 };
 
 export const updatePharmacyPatient = async (id, patientData) => {
   const companyId = await getMyCompanyId();
   if (!companyId) return { data: null, error: new Error("No company id") };
 
-  return await getPharmacySchema()
+  const result = await getPharmacySchema()
     .from('patients')
     .update({ ...patientData })
     .eq('id', id)
     .eq('company_id', companyId)
     .select()
     .single();
+
+  if (!result.error && result.data) {
+    await logAuditEvent('PATIENT_UPDATED', 'Paciente actualizado', {
+      patient_id: result.data.id,
+    });
+  }
+
+  return result;
 };
 
 // --- DOCTORES ---
-export const fetchDoctors = async (query = '') => {
+export const fetchDoctors = async (query = '', limit = 10) => {
   const companyId = await getMyCompanyId();
   if (!companyId) return { data: [], error: new Error("No company id") };
 
+  const normalizedQ = normalizeRut(query);
   let baseQuery = getPharmacySchema().from('doctors').select('*').eq('company_id', companyId);
   
-  if (query) {
-    baseQuery = baseQuery.or(`full_name.ilike.%${query}%,rut.ilike.%${query}%`);
+  if (normalizedQ) {
+    baseQuery = baseQuery.or(`full_name.ilike.%${query}%,rut.ilike.%${normalizedQ}%`);
   }
 
-  return await baseQuery.order('full_name', { ascending: true }).limit(50);
+  return await baseQuery.order('full_name', { ascending: true }).limit(limit);
 };
 
 export const createDoctor = async (doctorData) => {
@@ -204,13 +445,16 @@ export const fetchPendingPrescriptionsByPatient = async (patientId) => {
     .select('*, patient:patient_id(*)')
     .eq('company_id', companyId)
     .eq('patient_id', patientId)
-    .eq('status', 'PENDING')
+    .in('status', ['PENDING', 'PARTIAL'])
     .order('created_at', { ascending: false });
 };
 
 // Obtener todas las recetas médicas
 export const fetchPrescriptions = async () => {
-  return await getPharmacySchema().from('prescriptions').select('*, patient:patient_id(*)').order('created_at', { ascending: false });
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  return await getPharmacySchema().from('prescriptions').select('*, patient:patient_id(*)').eq('company_id', companyId).order('created_at', { ascending: false });
 };
 
 // Obtener una receta específica por su folio
@@ -233,234 +477,282 @@ export const fetchWarehouses = async () => {
   return await getPharmacySchema().from('warehouses').select('*').eq('company_id', companyId).order('name');
 };
 
-export const fetchLocations = async () => {
+export const fetchLocations = async (warehouseId = null) => {
   const companyId = await getMyCompanyId();
   if (!companyId) return { data: null, error: new Error("No company id") };
-  return await getPharmacySchema().from('locations').select('*, warehouse:warehouse_id(*)').eq('company_id', companyId).order('name');
+
+  let query = getPharmacySchema().from('locations').select('*, warehouse:warehouse_id(*)').eq('company_id', companyId);
+  if (warehouseId) query = query.eq('warehouse_id', warehouseId);
+  return await query.order('name');
 };
 
-export const createQuickPrescription = async (prescriptionData) => {
-  const companyId = await getMyCompanyId();
-  const userId = await getCurrentUserId();
-  if (!companyId) return { error: { message: "No company id" } };
 
-  return await getPharmacySchema()
-    .from('prescriptions')
-    .insert([{ 
-      ...prescriptionData, 
-      company_id: companyId, 
-      created_by: userId,
-      status: 'DISPENSED'
-    }])
-    .select()
-    .single();
-};
 
 export const createPrescriptionWithItems = async (prescriptionData, items) => {
   const schema = getPharmacySchema();
   const companyId = await getMyCompanyId();
   if (!companyId) return { error: { message: "No company id" } };
 
-  const { data: header, error: headerError } = await schema
-    .from('prescriptions')
-    .insert([{ ...prescriptionData, company_id: companyId }])
-    .select()
-    .single();
-
-  if (headerError) return { error: headerError };
-
-  const itemsWithHeaderId = items.map(item => ({
-    ...item,
-    prescription_id: header.id
+  // Prepare items for the RPC: requires an array of JSON objects with specific keys
+  const p_items = items.map(item => ({
+    product_id: item.product_id,
+    quantity_prescribed: Number(item.quantity_prescribed || 0),
+    dosage_instructions: item.dosage_instructions || item.instructions || ''
   }));
 
-  const { data: itemsData, error: itemsError } = await schema
-    .from('prescription_items')
-    .insert(itemsWithHeaderId);
+  const { data, error } = await schema.rpc('create_prescription_with_items', {
+    p_company_id: companyId,
+    p_patient_id: prescriptionData.patient_id || null,
+    p_doctor_id: prescriptionData.doctor_id || null,
+    p_prescriber_rut: prescriptionData.prescriber_rut || null,
+    p_prescriber_name: prescriptionData.prescriber_name || null,
+    p_folio_electronico: prescriptionData.folio_electronico || null,
+    p_issue_date: prescriptionData.issue_date || null,
+    p_valid_until: prescriptionData.valid_until || null,
+    p_diagnosis: prescriptionData.diagnosis || null,
+    p_notes: prescriptionData.notes || null,
+    p_items: p_items
+  });
 
-  return { data: { header, items: itemsData }, error: itemsError };
+  if (error) {
+    return { error };
+  }
+
+  // data will return the created prescription (the header)
+  const header = Array.isArray(data) ? data[0] : data;
+
+  await logAuditEvent('PRESCRIPTION_CREATED', 'Receta creada', {
+    prescription_id: header.id,
+    status: header.status,
+    patient_id: header.patient_id,
+    items: p_items
+  });
+
+  return { data: { header, items: items }, error: null };
 };
 
+export const derivePrescriptionTypeFromItems = async (items) => {
+  const schema = getPharmacySchema();
+  // The RPC expects p_items as jsonb
+  const p_items = items.map(item => ({ product_id: item.product_id }));
+
+  const { data, error } = await schema.rpc('derive_prescription_type_from_items', {
+    p_items: p_items
+  });
+  
+  if (!error && data) {
+    return data;
+  }
+  
+  // Fallback local en caso de error en la RPC
+  console.warn("Fallback de cálculo de tipo de receta local", error);
+  let highestType = 'RECETA_SIMPLE';
+  for (const item of items) {
+    const condition = (item.sale_condition || item.prescription_type || '').toUpperCase();
+    if (condition === 'RCH' || condition === 'RECETA_CHEQUE') {
+      return 'RECETA_CHEQUE'; // Máxima prioridad
+    }
+    if (condition === 'RR' || condition === 'RECETA_RETENIDA' || item.is_controlled) {
+      highestType = 'RECETA_RETENIDA';
+    }
+  }
+  
+  return highestType;
+};
+
+
 export const fetchPrescriptionItems = async (prescriptionId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  // Validar que la receta pertenezca a la empresa antes de traer sus items
+  const { data: valid } = await getPharmacySchema()
+    .from('prescriptions')
+    .select('id')
+    .eq('id', prescriptionId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (!valid) return { data: [], error: null };
+
   return await getPharmacySchema()
     .from('prescription_items')
     .select('*, product:product_id(*)')
     .eq('prescription_id', prescriptionId);
 };
 
-// --- OPERACIONES DE VENTA (POS) CON LÓGICA FEFO ---
-export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) => {
-  const schema = getPharmacySchema();
+// --- POS: PRODUCTOS CON STOCK Y PRECIO (RPC OPTIMIZADA) ---
+export const fetchPosProducts = async (warehouseId, search = '', limit = 100) => {
   const companyId = await getMyCompanyId();
   if (!companyId) throw new Error("Acceso denegado: No se encontró vinculación con una empresa.");
 
-  const userId = await getCurrentUserId();
-  if (!userId) throw new Error("Sesión expirada o usuario no autenticado.");
+  const { data, error } = await getPharmacySchema()
+    .rpc('get_pos_products', {
+      p_warehouse_id: warehouseId,
+      p_search: search || null,
+      p_limit: limit
+    });
 
-  const { data: openSession, error: openSessionError } = await schema
-    .from('pos_sessions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('user_id', userId)
-    .eq('warehouse_id', warehouseId)
-    .eq('status', 'OPEN')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  if (error) throw error;
 
-  if (openSessionError) {
-    throw openSessionError;
+  // Mapear campos de la RPC al formato esperado por el frontend
+  return (data || []).map(p => ({
+    id: p.product_id,
+    ...p,
+    stock_disponible: Number(p.stock_available || 0),
+    stock_cuarentena: Number(p.stock_quarantine || 0)
+  }));
+};
+
+// --- OPERACIONES DE VENTA (POS) — RPC TRANSACCIONAL ---
+export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) throw new Error("Acceso denegado: No se encontró vinculación con una empresa.");
+
+  if (!cartItems || cartItems.length === 0) {
+    throw new Error("La venta no contiene productos.");
   }
 
-  if (!openSession?.id) {
-    throw new Error('Debes abrir tu caja en el módulo de Control de Caja antes de poder vender');
+  // Normalizar items al formato esperado por la RPC
+  const p_items = cartItems.map(item => ({
+    product_id: item.id || item.product_id,
+    quantity: Number(item.quantity || 1),
+    unit_price: Number(item.price_sale || item.unit_price || 0),
+    prescription_id: item.prescription_id || null
+  }));
+
+  const headerPrescriptionId = saleHeader.prescription_id || p_items.find(i => i.prescription_id)?.prescription_id || null;
+
+  // Validar que todas las recetas asociadas estén pendientes
+  const prescriptionIds = new Set([
+    ...(headerPrescriptionId ? [headerPrescriptionId] : []),
+    ...p_items.map(i => i.prescription_id).filter(Boolean)
+  ]);
+  if (prescriptionIds.size > 0) {
+    for (const pid of prescriptionIds) {
+      const { error: valErr } = await getPharmacySchema()
+        .rpc('validate_prescription_pending', { p_prescription_id: pid });
+      if (valErr) {
+        const msg = valErr.message || '';
+        if (msg.includes('despachada') || msg.includes('disponible')) {
+          throw new Error('Esta receta ya fue despachada o no está disponible.');
+        }
+        throw new Error(msg);
+      }
+    }
   }
 
-  // 1. Creación de la Cabecera (Payload Estricto de 6 propiedades)
-  const salePayload = {
-    company_id: companyId,
-    user_id: userId,
-    session_id: openSession.id,
-    total_amount: Number(saleHeader.total_amount),
+  const { data, error } = await getPharmacySchema()
+    .rpc('process_pharmacy_sale', {
+      p_warehouse_id: warehouseId,
+      p_total_amount: Number(saleHeader.total_amount || 0),
+      p_payment_method: saleHeader.payment_method || 'CASH',
+      p_document_number: saleHeader.document_number || `TICKET-${Date.now()}`,
+      p_patient_id: saleHeader.patient_id || null,
+      p_prescription_id: headerPrescriptionId,
+      p_items
+    });
+
+  if (error) {
+    const msg = error.message || '';
+    if (msg.includes('stock') || msg.includes('Stock')) {
+      throw new Error(`Stock insuficiente: ${msg}`);
+    }
+    if (msg.includes('caja') || msg.includes('session') || msg.includes('OPEN')) {
+      throw new Error('Debes abrir tu caja en el módulo de Control de Caja antes de poder vender.');
+    }
+    if (msg.includes('company') || msg.includes('empresa')) {
+      throw new Error('Acceso denegado: No se encontró vinculación con una empresa.');
+    }
+    throw new Error(msg);
+  }
+
+  const saleResult = Array.isArray(data) ? data[0] : data;
+  const saleRecord = saleResult?.sale || saleResult || {};
+  const saleId = saleRecord.id || saleResult?.sale_id || null;
+  let sessionId = saleRecord.session_id || saleHeader.session_id || null;
+  let operatorId = saleHeader.operator_id || null;
+
+  if ((!sessionId || !operatorId) && warehouseId) {
+    try {
+      const { data: currentSession } = await fetchOpenPosSession(warehouseId);
+      sessionId = sessionId || currentSession?.id || null;
+      operatorId = operatorId || currentSession?.operator_id || currentSession?.operator?.id || null;
+    } catch (sessionErr) {
+      console.warn('No se pudo resolver sesion POS para auditoria:', sessionErr.message || sessionErr);
+    }
+  }
+
+  const saleAuditMetadata = {
+    sale_id: saleId,
+    prescription_id: headerPrescriptionId,
+    prescription_ids: [...prescriptionIds],
+    warehouse_id: warehouseId,
+    session_id: sessionId,
+    operator_id: operatorId,
+    amount: Number(saleHeader.total_amount || 0),
     payment_method: saleHeader.payment_method || 'CASH',
-    document_number: saleHeader.document_number || `TICKET-${Date.now()}`,
-    patient_id: saleHeader.patient_id || null
+    items: p_items.map(item => ({
+      product_id: item.product_id,
+      cantidad: item.quantity,
+      amount: item.unit_price,
+      prescription_id: item.prescription_id,
+    })),
   };
 
-  const { data: header, error: headerError } = await schema
-    .from('sales')
-    .insert([salePayload])
-    .select()
-    .single();
+  await logAuditEvent('SALE_COMPLETED', 'Venta POS exitosa', saleAuditMetadata);
 
-  if (headerError) {
-    console.error("ERROR CABECERA VENTA:", headerError);
-    throw headerError;
+  if (prescriptionIds.size > 0) {
+    await logAuditEvent('SALE_WITH_PRESCRIPTION', 'Venta POS con receta', saleAuditMetadata);
   }
-  const saleHeaderId = header.id;
 
-  // 2. Bucle Principal (Por cada producto en cartItems)
-  for (const item of cartItems) {
-    const productId = item.id || item.product_id;
-    const priceSale = item.price_sale || item.unit_price || 0;
+  // La RPC process_pharmacy_sale ya maneja quantity_dispensed y estado de receta
+  // de forma atómica. Solo registramos auditoría por cada receta involucrada.
+  if (prescriptionIds.size > 0) {
+    const schema = getPharmacySchema();
+    for (const pid of prescriptionIds) {
+      const { data: statusData } = await schema
+        .from('prescriptions')
+        .select('status')
+        .eq('company_id', companyId)
+        .eq('id', pid)
+        .maybeSingle();
 
-    // Búsqueda FEFO: solo stock vendible del local, bloqueando Cuarentena desde POS.
-    let { data: batches, error: batchesErr } = await schema
-      .from('inventory_batches')
-      .select('*, location:location_id!inner(id, name, location_type, warehouse_id)')
-      .eq('product_id', productId)
-      .eq('location.warehouse_id', warehouseId)
-      .neq('location.location_type', 'QUARANTINE')
-      .gt('current_quantity', 0)
-      .order('expiry_date', { ascending: true });
-
-    if (batchesErr) {
-      console.warn('[POS] Filtro por location_type en join falló; aplicando exclusión de cuarentena en memoria.', batchesErr);
-      const fallback = await schema
-        .from('inventory_batches')
-        .select('*, location:location_id!inner(id, name, location_type, warehouse_id)')
-        .eq('product_id', productId)
-        .eq('location.warehouse_id', warehouseId)
-        .gt('current_quantity', 0)
-        .order('expiry_date', { ascending: true });
-
-      batches = fallback.data;
-      batchesErr = fallback.error;
-    }
-
-    if (batchesErr) throw batchesErr;
-
-    const validBatches = (batches || [])
-      .filter(batch => {
-        const locationType = batch.location?.location_type?.toUpperCase();
-        const locationName = batch.location?.name?.toLowerCase() || '';
-        return locationType !== 'QUARANTINE' && !locationName.includes('cuarentena');
-      })
-      .sort((a, b) => {
-        const isASales = a.location?.location_type?.toUpperCase() === 'SALES' || a.location?.name?.toLowerCase().includes('venta');
-        const isBSales = b.location?.location_type?.toUpperCase() === 'SALES' || b.location?.name?.toLowerCase().includes('venta');
-
-        if (isASales && !isBSales) return -1;
-        if (!isASales && isBSales) return 1;
-
-        return new Date(a.expiry_date) - new Date(b.expiry_date);
-      });
-
-    // 3. Bucle Destripador de Lotes
-    let remainingToFulfill = item.quantity;
-
-    for (const batch of validBatches) {
-      if (remainingToFulfill <= 0) break;
-
-      const qtyToDeduct = Math.min(remainingToFulfill, batch.current_quantity);
-      const newBatchQty = batch.current_quantity - qtyToDeduct;
-      
-      // A. Actualizar Lote
-      const { error: updErr } = await schema
-        .from('inventory_batches')
-        .update({ current_quantity: newBatchQty })
-        .eq('id', batch.id);
-      
-      if (updErr) throw updErr;
-      
-      // B. Insertar item de venta asociado a este lote
-      const { error: itemErr } = await schema
-        .from('sale_items')
-        .insert({
-           company_id: companyId,
-           sale_id: saleHeaderId,
-           product_id: productId,
-           batch_id: batch.id,
-           quantity: qtyToDeduct,
-           unit_price: priceSale,
-           subtotal: qtyToDeduct * priceSale,
-           prescription_id: item.prescription_id || null
-        });
-      
-      if (itemErr) throw itemErr;
-
-      // C. Insertar movimiento en Kardex
-      const { error: movErr } = await schema
-        .from('inventory_movements')
-        .insert({
-           company_id: companyId,
-           product_id: productId,
-           batch_id: batch.id,
-           batch_number: batch.batch_number,
-           from_location_id: batch.location_id,
-           movement_type: 'SALE',
-           quantity: -Math.abs(qtyToDeduct),
-           balance_after: newBatchQty,
-           reference_folio: saleHeader.document_number || 'VENTA_POS'
-        });
-      
-      if (movErr) throw movErr;
-
-      remainingToFulfill -= qtyToDeduct;
-    }
-
-    if (remainingToFulfill > 0) {
-      throw new Error(`Stock físico insuficiente para ${item.name || 'producto'}. Faltan ${remainingToFulfill} unidades.`);
+      if (statusData?.status === 'PARTIAL' || statusData?.status === 'DISPENSED') {
+        const prescriptionItems = p_items.filter(item => item.prescription_id === pid);
+        await logAuditEvent(
+          statusData.status === 'PARTIAL' ? 'PRESCRIPTION_PARTIAL' : 'PRESCRIPTION_DISPENSED',
+          statusData.status === 'PARTIAL' ? 'Receta dispensada parcialmente' : 'Receta dispensada',
+          {
+            sale_id: saleId,
+            prescription_id: pid,
+            warehouse_id: warehouseId,
+            session_id: sessionId,
+            operator_id: operatorId,
+            cantidad: prescriptionItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+            items: prescriptionItems.map(item => ({
+              product_id: item.product_id,
+              cantidad: item.quantity,
+            })),
+          }
+        );
+      }
     }
   }
 
-  // Si la venta está vinculada a una receta, marcarla como dispensada
-  if (saleHeader.prescription_id) {
-    await schema
-      .from('prescriptions')
-      .update({ status: 'DISPENSED' })
-      .eq('id', saleHeader.prescription_id);
-  }
-
-  return header;
+  return data;
 };
 
 export const findPendingPrescription = async (folio) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return null;
+
   const { data, error } = await getPharmacySchema()
     .from('prescriptions')
     .select('*, patient:patient_id(*)')
+    .eq('company_id', companyId)
     .eq('folio', folio)
-    .eq('status', 'PENDING')
+    .in('status', ['PENDING', 'PARTIAL'])
     .single();
 
   if (error) return null;
@@ -536,7 +828,7 @@ export const preOpenSession = async ({ terminalId, warehouseId, operatorId, open
 
   if (!companyId || !userId) return { error: new Error('Usuario no identificado') };
 
-  return await schema
+  const result = await schema
     .from('pos_sessions')
     .insert({
       company_id: companyId,
@@ -550,6 +842,17 @@ export const preOpenSession = async ({ terminalId, warehouseId, operatorId, open
     })
     .select()
     .single();
+
+  if (!result.error && result.data) {
+    await logAuditEvent('POS_SESSION_PREOPENED', 'Caja pre-abierta', {
+      session_id: result.data.id,
+      warehouse_id: result.data.warehouse_id,
+      operator_id: result.data.operator_id,
+      amount: Number(result.data.opening_balance || 0),
+    });
+  }
+
+  return result;
 };
 
 export const activateSession = async ({ sessionId, operatorId, warehouseId, pinCode }) => {
@@ -569,12 +872,24 @@ export const activateSession = async ({ sessionId, operatorId, warehouseId, pinC
   if (!pinValid) return { error: new Error('PIN inválido') };
 
   // 2. Activar sesión
-  return await schema
+  const result = await schema
     .from('pos_sessions')
     .update({ status: 'OPEN' })
+    .eq('company_id', companyId)
     .eq('id', sessionId)
     .select()
     .single();
+
+  if (!result.error && result.data) {
+    await logAuditEvent('POS_SESSION_OPENED', 'Caja abierta', {
+      session_id: result.data.id,
+      warehouse_id: result.data.warehouse_id,
+      operator_id: result.data.operator_id,
+      amount: Number(result.data.opening_balance || 0),
+    });
+  }
+
+  return result;
 };
 
 export const openPosSession = async ({ warehouseId, openingBalance, operatorId }) => {
@@ -586,7 +901,7 @@ export const openPosSession = async ({ warehouseId, openingBalance, operatorId }
     return { data: null, error: new Error('No se pudo resolver compania, usuario o sucursal.') };
   }
 
-  return await schema
+  const result = await schema
     .from('pos_sessions')
     .insert({
       company_id: companyId,
@@ -599,6 +914,17 @@ export const openPosSession = async ({ warehouseId, openingBalance, operatorId }
     })
     .select()
     .single();
+
+  if (!result.error && result.data) {
+    await logAuditEvent('POS_SESSION_OPENED', 'Caja abierta', {
+      session_id: result.data.id,
+      warehouse_id: result.data.warehouse_id,
+      operator_id: result.data.operator_id,
+      amount: Number(result.data.opening_balance || 0),
+    });
+  }
+
+  return result;
 };
 
 export const fetchPosSessionSummary = async (session) => {
@@ -757,7 +1083,17 @@ export const createCashMovement = async ({ sessionId, movementType, amount, reas
     return { data: null, error: new Error('No se pudo resolver compania, usuario o sesion.') };
   }
 
-  return await schema
+  let sessionMeta = null;
+  const { data: sessionData, error: sessionError } = await schema
+    .from('pos_sessions')
+    .select('warehouse_id, operator_id')
+    .eq('company_id', companyId)
+    .eq('id', sessionId)
+    .maybeSingle();
+
+  if (!sessionError) sessionMeta = sessionData;
+
+  const result = await schema
     .from('cash_movements')
     .insert({
       company_id: companyId,
@@ -769,6 +1105,18 @@ export const createCashMovement = async ({ sessionId, movementType, amount, reas
     })
     .select()
     .single();
+
+  if (!result.error && result.data) {
+    await logAuditEvent(movementType === 'IN' ? 'CASH_IN' : 'CASH_OUT', movementType === 'IN' ? 'Ingreso de efectivo' : 'Retiro de efectivo', {
+      cash_movement_id: result.data.id,
+      session_id: sessionId,
+      warehouse_id: sessionMeta?.warehouse_id || null,
+      operator_id: sessionMeta?.operator_id || null,
+      amount: Number(amount || 0),
+    });
+  }
+
+  return result;
 };
 
 export const closePosSession = async ({ sessionId, closingBalance, difference }) => {
@@ -779,7 +1127,7 @@ export const closePosSession = async ({ sessionId, closingBalance, difference })
     return { data: null, error: new Error('No se pudo resolver compania o sesion.') };
   }
 
-  return await schema
+  const result = await schema
     .from('pos_sessions')
     .update({
       status: 'CLOSED',
@@ -791,6 +1139,18 @@ export const closePosSession = async ({ sessionId, closingBalance, difference })
     .eq('id', sessionId)
     .select()
     .single();
+
+  if (!result.error && result.data) {
+    await logAuditEvent('POS_SESSION_CLOSED', 'Caja cerrada', {
+      session_id: result.data.id,
+      warehouse_id: result.data.warehouse_id,
+      operator_id: result.data.operator_id,
+      amount: Number(result.data.closing_balance || 0),
+      difference: Number(result.data.difference || 0),
+    });
+  }
+
+  return result;
 };
 
 export const fetchPosOperators = async (warehouseId) => {
@@ -970,6 +1330,19 @@ export const fetchPurchaseOrders = async (warehouseId = null) => {
 };
 
 export const fetchPurchaseOrderItems = async (purchaseOrderId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  // Validar que la OC pertenezca a la empresa
+  const { data: valid } = await getPharmacySchema()
+    .from('purchase_orders')
+    .select('id')
+    .eq('id', purchaseOrderId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (!valid) return { data: [], error: null };
+
   return await getPharmacySchema()
     .from('purchase_order_items')
     .select('*, product:product_id(*)')
@@ -977,9 +1350,13 @@ export const fetchPurchaseOrderItems = async (purchaseOrderId) => {
 };
 
 export const fetchOrderReceipts = async (poId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
   return await getPharmacySchema()
     .from('inventory_receipts')
     .select('id, document_type, document_number, received_date, notes, created_at')
+    .eq('company_id', companyId)
     .eq('po_id', poId)
     .order('created_at', { ascending: false });
 };
@@ -1176,6 +1553,28 @@ export const receivePurchaseOrder = async (poId, batchesData, receiptData) => {
 
   if (headerError) throw headerError;
 
+  const receivedItems = batchesData.map(batch => {
+    const factor = Number(batch.conversion_factor) || 1;
+    return {
+      product_id: batch.product_id,
+      cantidad: Number(batch.entered_quantity || 0) * factor,
+    };
+  });
+
+  const receiptMetadata = {
+    purchase_order_id: poId,
+    warehouse_id: receiptData.warehouse_id,
+    cantidad: receivedItems.reduce((sum, item) => sum + Number(item.cantidad || 0), 0),
+    document_type: receiptData.document_type,
+    items: receivedItems,
+  };
+
+  await logAuditEvent('PURCHASE_ORDER_RECEIVED', 'Recepcion de orden de compra', receiptMetadata);
+
+  if (receiptData.document_type === 'AJUSTE') {
+    await logAuditEvent('INVENTORY_ADJUSTMENT', 'Ajuste de inventario', receiptMetadata);
+  }
+
   return { data: header, error: null };
 };
 
@@ -1214,6 +1613,17 @@ export const createPurchaseOrderWithItems = async (headerData, items) => {
 
   if (itemsError) throw itemsError;
 
+  await logAuditEvent('PURCHASE_ORDER_CREATED', 'Orden de compra creada', {
+    purchase_order_id: header.id,
+    warehouse_id: header.warehouse_id || headerData.warehouse_id || null,
+    amount: Number(header.total_amount || headerData.total_amount || 0),
+    items: detailItems.map(item => ({
+      product_id: item.product_id,
+      cantidad: Number(item.quantity || 0),
+      amount: Number(item.total_cost || 0),
+    })),
+  });
+
   return header;
 };
 
@@ -1232,6 +1642,12 @@ export const createTransferRequest = async (transferData, cartItems) => {
   if (authErr || !user) throw new Error("Usuario no autenticado.");
 
   const isInternal = transferData.source_warehouse_id === transferData.dest_warehouse_id;
+  const transferItemsMetadata = cartItems.map(item => ({
+    product_id: item.batch?.product_id,
+    cantidad: Number(item.transferQuantity || 0),
+    batch_id: item.batch?.id,
+  }));
+  const transferQuantityTotal = transferItemsMetadata.reduce((sum, item) => sum + Number(item.cantidad || 0), 0);
 
   if (isInternal) {
     // CASO A: Acomodo Inmediato (Putaway Directo)
@@ -1331,6 +1747,18 @@ export const createTransferRequest = async (transferData, cartItems) => {
         throw new Error(`[Kardex] FALLO al registrar INTERNAL_TRANSFER entrada: ${movInErr.message}`);
       }
     }
+
+    await logAuditEvent('INTERNAL_TRANSFER_COMPLETED', 'Acomodo interno de inventario', {
+      warehouse_id: transferData.source_warehouse_id,
+      source_warehouse_id: transferData.source_warehouse_id,
+      destination_warehouse_id: transferData.dest_warehouse_id,
+      source_location_id: transferData.source_location_id,
+      destination_location_id: transferData.dest_location_id,
+      operator_id: null,
+      cantidad: transferQuantityTotal,
+      items: transferItemsMetadata,
+    });
+
     return { type: 'ACOMODO', message: 'Acomodo interno finalizado correctamente.' };
   } else {
     // CASO B: Reserva Inter-Sucursal
@@ -1406,6 +1834,17 @@ export const createTransferRequest = async (transferData, cartItems) => {
       }
     }
 
+    await logAuditEvent('TRANSFER_CREATED', 'Traspaso entre sucursales generado', {
+      transfer_id: header.id,
+      folio: header.folio,
+      warehouse_id: transferData.source_warehouse_id,
+      source_warehouse_id: transferData.source_warehouse_id,
+      destination_warehouse_id: transferData.dest_warehouse_id,
+      operator_id: null,
+      cantidad: transferQuantityTotal,
+      items: transferItemsMetadata,
+    });
+
     return { type: 'RESERVA', folio: header.folio, message: `Reserva ${header.folio} generada. Pendiente de recepción en destino.` };
   }
 };
@@ -1426,6 +1865,19 @@ export const fetchPendingTransfers = async (warehouseId) => {
 };
 
 export const fetchTransferItems = async (transferId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  // Validar que la solicitud pertenezca a la empresa
+  const { data: valid } = await getPharmacySchema()
+    .from('transfer_requests')
+    .select('id')
+    .eq('id', transferId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (!valid) return { data: [], error: null };
+
   return await getPharmacySchema()
     .from('transfer_request_items')
     .select('*, product:products!product_id(name, dci), batch:inventory_batches!batch_id(batch_number, expiry_date)')
@@ -1435,7 +1887,6 @@ export const fetchTransferItems = async (transferId) => {
 export const receiveTransfer = async (transferId, warehouseId, receptionMeta = {}, receivedQuantities = {}) => {
   const schema = getPharmacySchema();
   const companyId = await getMyCompanyId();
-  const userId = await getCurrentUserId();
 
   const { dispatchGuide = null, receptionNotes = null } = receptionMeta;
 
@@ -1443,6 +1894,7 @@ export const receiveTransfer = async (transferId, warehouseId, receptionMeta = {
   const { data: quarantineLoc, error: qError } = await schema
     .from('locations')
     .select('id')
+    .eq('company_id', companyId)
     .eq('warehouse_id', warehouseId)
     .eq('location_type', 'QUARANTINE')
     .limit(1)
@@ -1451,11 +1903,14 @@ export const receiveTransfer = async (transferId, warehouseId, receptionMeta = {
   if (qError || !quarantineLoc) throw new Error("No se encontró ubicación de CUARENTENA en la sucursal de destino.");
 
   // 2. Obtener cabecera (folio) + items del traspaso
-  const { data: header } = await schema
+  const { data: header, error: headerErr } = await schema
     .from('transfer_requests')
-    .select('folio')
+    .select('folio, source_warehouse_id, destination_warehouse_id')
+    .eq('company_id', companyId)
     .eq('id', transferId)
     .single();
+
+  if (headerErr) throw headerErr;
   const transferFolio = header?.folio || null;
 
   const { data: items, error: iError } = await schema
@@ -1559,9 +2014,27 @@ export const receiveTransfer = async (transferId, warehouseId, receptionMeta = {
   const { error: finalError } = await schema
     .from('transfer_requests')
     .update(headerUpdate)
+    .eq('company_id', companyId)
     .eq('id', transferId);
 
   if (finalError) throw finalError;
+
+  const receivedItems = items.map(item => ({
+    product_id: item.product_id,
+    cantidad: Number(receivedQuantities[item.id] ?? item.quantity),
+    batch_id: item.batch_id,
+  }));
+
+  await logAuditEvent('TRANSFER_RECEIVED', 'Traspaso entre sucursales recibido', {
+    transfer_id: transferId,
+    folio: transferFolio,
+    warehouse_id: warehouseId,
+    source_warehouse_id: header?.source_warehouse_id || null,
+    destination_warehouse_id: header?.destination_warehouse_id || warehouseId,
+    operator_id: null,
+    cantidad: receivedItems.reduce((sum, item) => sum + Number(item.cantidad || 0), 0),
+    items: receivedItems,
+  });
 
   return { success: true };
 };
@@ -1601,10 +2074,14 @@ export const createWarehouse = async (warehouseData) => {
 };
 
 export const updateWarehouse = async (id, warehouseData) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) throw new Error("No company id");
+
   const { data, error } = await getPharmacySchema()
     .from('warehouses')
     .update(warehouseData)
     .eq('id', id)
+    .eq('company_id', companyId)
     .select()
     .single();
   if (error) throw error;
@@ -1612,9 +2089,13 @@ export const updateWarehouse = async (id, warehouseData) => {
 };
 
 export const deleteWarehouse = async (id) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) throw new Error("No company id");
+
   const { error } = await getPharmacySchema()
     .from('warehouses')
     .update({ is_active: false })
-    .eq('id', id);
+    .eq('id', id)
+    .eq('company_id', companyId);
   if (error) throw error;
 };

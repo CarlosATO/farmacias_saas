@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronRight, ArrowLeft, Save, Pill, Search } from 'lucide-react';
-import { fetchPharmacyProducts, getPharmacySchema, getMyCompanyId, getCurrentUserId } from '../../../farmacia/api/pharmacyClient';
+import { fetchPharmacyProducts, getPharmacySchema, getMyCompanyId, getCurrentUserId, logAuditEvent } from '../../../farmacia/api/pharmacyClient';
 
 const SALE_CONDITIONS = [
   { value: 'VD', label: 'VD - Venta Directa' },
@@ -78,6 +78,12 @@ export default function CatalogoMedicamentos() {
         return;
       }
 
+      let mappedPrescriptionType = 'VENTA_LIBRE';
+      let isControlled = false;
+      if (form.sale_condition === 'R') mappedPrescriptionType = 'RECETA_SIMPLE';
+      if (form.sale_condition === 'RR') { mappedPrescriptionType = 'RECETA_RETENIDA'; isControlled = true; }
+      if (form.sale_condition === 'RCH') { mappedPrescriptionType = 'RECETA_CHEQUE'; isControlled = true; }
+
       const payload = {
         name: (form.name || '').toUpperCase(),
         dci: (form.active_ingredient || '').toUpperCase(),
@@ -92,18 +98,33 @@ export default function CatalogoMedicamentos() {
         barcode_purchase: form.barcode_purchase || '',
         family: (form.family || '').toUpperCase(),
         subfamily: (form.subfamily || '').toUpperCase(),
-        prescription_type: form.prescription_type,
+        prescription_type: mappedPrescriptionType,
+        is_controlled: isControlled,
         company_id: companyId
       };
 
       if (form.id) {
-        const { error } = await schema.from('products').update({ ...payload, updated_by: userId }).eq('id', form.id);
+        const { data: savedProduct, error } = await schema
+          .from('products')
+          .update({ ...payload, updated_by: userId })
+          .eq('company_id', companyId)
+          .eq('id', form.id)
+          .select('id')
+          .single();
         if (error) throw error;
+        await logAuditEvent('PRODUCT_UPDATED', 'Producto actualizado', {
+          product_id: savedProduct?.id || form.id,
+          amount: Number(payload.unit_price || 0),
+        });
         alert('Medicamento actualizado');
       } else {
         const insertPayload = { ...payload, stock_quantity: 0, created_by: userId };
-        const { error } = await schema.from('products').insert([insertPayload]).select().single();
+        const { data: savedProduct, error } = await schema.from('products').insert([insertPayload]).select('id').single();
         if (error) throw error;
+        await logAuditEvent('PRODUCT_CREATED', 'Producto creado', {
+          product_id: savedProduct?.id,
+          amount: Number(payload.unit_price || 0),
+        });
         alert('Medicamento creado');
       }
 
@@ -158,7 +179,7 @@ export default function CatalogoMedicamentos() {
 
   if (view === 'form') {
     return (
-      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+      <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden animate-in fade-in duration-150">
         <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
             <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                 <span className="hover:text-gray-900 cursor-pointer" onClick={() => { setView('list'); resetForm(); }}>Catálogo de Medicamentos</span>
@@ -238,15 +259,6 @@ export default function CatalogoMedicamentos() {
                                         <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Condición de Venta (Resumen)</label>
                                         <select value={form.sale_condition} onChange={e => setForm({...form, sale_condition: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none bg-white">
                                             {SALE_CONDITIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1 block">Tipo de Receta (Control Financiero/Legal)</label>
-                                        <select value={form.prescription_type} onChange={e => setForm({...form, prescription_type: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none bg-white font-bold text-[#4C3073]">
-                                            <option value="VENTA_LIBRE">VENTA LIBRE</option>
-                                            <option value="RECETA_SIMPLE">RECETA SIMPLE</option>
-                                            <option value="RECETA_RETENIDA">RECETA RETENIDA</option>
-                                            <option value="RECETA_CHEQUE">RECETA CHEQUE</option>
                                         </select>
                                     </div>
                                 </div>

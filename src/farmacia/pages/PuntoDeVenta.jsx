@@ -2,16 +2,16 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Search, Plus, Trash2, ShieldAlert, FlaskConical,
-  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet, Calculator, ArrowLeft, Banknote, Receipt
+  Stethoscope, CreditCard, X, Keyboard, MapPin, Loader2, Package, Barcode, ArrowUpCircle, Wallet, Calculator, ArrowLeft, Banknote, Receipt, CheckCircle2
 } from 'lucide-react';
 import {
-  fetchPharmacyProducts, fetchPrescriptions, createCashMovement, createSaleWithItems, fetchInventoryStock, fetchPricesByWarehouse,
+  createCashMovement, createSaleWithItems, fetchPosProducts,
   fetchPosSessionSummary, verifyPosOperatorPin, closePosSession,
   fetchPosTerminals, fetchSessionByTerminal, activateSession,
-  fetchPharmacyPatients, createPharmacyPatient, createQuickPrescription,
+  fetchPharmacyPatients, createPharmacyPatient, createPrescriptionWithItems,
   fetchPrescriptionByFolio, fetchPrescriptionItems,
   fetchPendingPrescriptionsByPatient,
-  fetchDoctors, createDoctor
+  fetchDoctors, createDoctor, normalizeRut
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
@@ -24,11 +24,12 @@ export default function PuntoDeVenta() {
   const navigate = useNavigate();
   const { activeWarehouse } = useSucursal();
   const [products, setProducts] = useState([]);
-  const [prescriptions, setPrescriptions] = useState([]);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showSearchModal, setShowSearchModal] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const [validationModal, setValidationModal] = useState({ 
     isOpen: false, 
     type: null, 
@@ -37,8 +38,11 @@ export default function PuntoDeVenta() {
     folioSearch: '',
     isLoading: false
   });
-  const [expressFormData, setExpressFormData] = useState({ rut: '', nombre: '', folio: '', patientRut: '', patientNombre: '' });
-  const [selectedPrescription, setSelectedPrescription] = useState('');
+  const [expressFormData, setExpressFormData] = useState({ rut: '', nombre: '', folio: '', patientRut: '', patientNombre: '', institution: '' });
+  const [expressSearch, setExpressSearch] = useState({ patientResults: [], doctorResults: [], selectedPatientId: null, selectedDoctorId: null, searchingPatient: false, searchingDoctor: false });
+  // Debounce refs for express search
+  const doctorDebounceRef = useRef(null);
+  const patientDebounceRef = useRef(null);
   const [isProcessingSale, setIsProcessingSale] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [quickCashModal, setQuickCashModal] = useState({ open: false, amount: '', reason: '' });
@@ -71,7 +75,9 @@ export default function PuntoDeVenta() {
   const [newPatient, setNewPatient] = useState({ rut: '', full_name: '', phone: '' });
   const [isSavingPatient, setIsSavingPatient] = useState(false);
   // Puente inteligente: recetas pendientes del paciente
-  const [pendingRecipesModal, setPendingRecipesModal] = useState({ open: false, prescriptions: [], loading: false });
+  const [pendingRecipesModal, setPendingRecipesModal] = useState({ open: false, prescriptions: [], loading: false, selected: new Set(), detailPrescription: null });
+  // IDs de recetas creadas en express durante esta sesión de carrito (para excluir del modal de pendientes)
+  const [expressCreatedPrescriptionIds, setExpressCreatedPrescriptionIds] = useState(new Set());
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
 
@@ -90,51 +96,16 @@ export default function PuntoDeVenta() {
 
     setLoading(true);
     try {
-      const [prodRes, preRes, stockRes, priceRes, sessionRes, patientsRes] = await Promise.all([
-        fetchPharmacyProducts(),
-        fetchPrescriptions(),
-        fetchInventoryStock(activeWarehouse.id),
-        fetchPricesByWarehouse(activeWarehouse.id),
+      const [posResult, sessionRes, patientsRes] = await Promise.all([
+        fetchPosProducts(activeWarehouse.id, '', 100),
         fetchSessionByTerminal(terminalId),
-        fetchPharmacyPatients()
+        fetchPharmacyPatients() // carga inicial 50 pacientes para el selector
       ]);
 
-      const prodData = prodRes.data || [];
-      const stockData = stockRes.data || [];
-      const priceData = priceRes.data || [];
-      const preData = preRes.data?.filter(p => p.status === 'PENDING') || [];
+      const enrichedProducts = posResult || [];
       const currentSession = sessionRes.data || null;
-      const patientsData = patientsRes.data || [];
-      setPatients(patientsData);
-
-      // ... existing stock and price logic ...
-      const stockMapLocal = {};
-      stockData.forEach(batch => {
-        const qty = Number(batch.current_quantity || 0);
-        const locationType = batch.location?.location_type?.toUpperCase();
-        const locationName = batch.location?.name?.toLowerCase() || '';
-        const isQuarantine = locationType === 'QUARANTINE' || locationName.includes('cuarentena');
-        if (!stockMapLocal[batch.product_id]) stockMapLocal[batch.product_id] = { disponible: 0, cuarentena: 0 };
-        if (isQuarantine) stockMapLocal[batch.product_id].cuarentena += qty;
-        else stockMapLocal[batch.product_id].disponible += qty;
-      });
-
-      const priceMapLocal = {};
-      priceData.forEach(item => { priceMapLocal[item.product_id] = Number(item.price_sale); });
-
-      const enrichedProducts = prodData.map(p => {
-        const stock = stockMapLocal[p.id] || { disponible: 0, cuarentena: 0 };
-        return {
-          ...p,
-          stock_disponible: stock.disponible,
-          stock_cuarentena: stock.cuarentena,
-          stock_local: stock.disponible,
-          price_sale: priceMapLocal[p.id] || 0
-        };
-      });
-
+      setPatients(patientsRes.data || []);
       setProducts(enrichedProducts);
-      setPrescriptions(preData);
       setActiveSession(currentSession);
 
       if (currentSession) {
@@ -164,7 +135,7 @@ export default function PuntoDeVenta() {
     if (!activeSession || !activationModal.pinCode) return;
     setIsProcessingSale(true);
     try {
-      const { data, error } = await activateSession({
+      const { error } = await activateSession({
         sessionId: activeSession.id,
         operatorId: activeSession.operator_id,
         warehouseId: activeWarehouse.id,
@@ -192,12 +163,27 @@ export default function PuntoDeVenta() {
   // ── PUENTE INTELIGENTE: detector de recetas pendientes ─────────────────
   useEffect(() => {
     if (!selectedPatient?.id || selectedPatient.id === 'PÚBLICO GENERAL') return;
+    // Nuevo paciente → limpiar set de recetas express (distinto paciente, distinta sesión)
+    setExpressCreatedPrescriptionIds(new Set());
     
     const checkPending = async () => {
       try {
         const { data, error } = await fetchPendingPrescriptionsByPatient(selectedPatient.id);
         if (!error && data && data.length > 0) {
-          setPendingRecipesModal({ open: true, prescriptions: data, loading: false });
+          // Pre-fetch items to display detail and process loads faster
+          const enriched = await Promise.all(
+            data.map(async p => {
+              const { data: items } = await fetchPrescriptionItems(p.id);
+              return { ...p, items: items || [] };
+            })
+          );
+          // Excluir recetas ya asociadas al carrito actual (express creadas en esta sesión o cargadas previamente)
+          const cartPrescriptionIds = new Set(cart.map(c => c.prescription_id).filter(Boolean));
+          const allExcluded = new Set([...expressCreatedPrescriptionIds, ...cartPrescriptionIds]);
+          const filtered = enriched.filter(p => !allExcluded.has(p.id));
+          if (filtered.length === 0) return; // nada que mostrar
+          const selected = new Set(); // Require user to explicitly select
+          setPendingRecipesModal({ open: true, prescriptions: filtered, loading: false, selected, detailPrescription: null });
         }
       } catch (err) {
         console.error("Error verificando recetas pendientes:", err);
@@ -209,10 +195,12 @@ export default function PuntoDeVenta() {
   const handleLoadPendingRecipes = async () => {
     setPendingRecipesModal(prev => ({ ...prev, loading: true }));
     try {
+      const selectedPrescriptions = pendingRecipesModal.prescriptions.filter(p => pendingRecipesModal.selected.has(p.id));
+      
       let updatedCart = [...cart];
-      for (const prescription of pendingRecipesModal.prescriptions) {
-        const { data: items, error } = await fetchPrescriptionItems(prescription.id);
-        if (error || !items) continue;
+      for (const prescription of selectedPrescriptions) {
+        const items = prescription.items || [];
+        if (!items.length) continue;
         
         for (const item of items) {
           const product = item.product;
@@ -226,8 +214,11 @@ export default function PuntoDeVenta() {
           const existingIdx = updatedCart.findIndex(
             c => c.id === product.id && c.correlativo_asociado === prescription.folio_electronico
           );
+          const remaining = Math.max(0, (item.quantity_prescribed || 1) - (item.quantity_dispensed || 0));
+          if (remaining <= 0) continue;
+
           if (existingIdx !== -1) {
-            const newQty = updatedCart[existingIdx].quantity + (item.quantity_prescribed || 1);
+            const newQty = updatedCart[existingIdx].quantity + remaining;
             if (newQty > effectiveStock) {
               alert(`Stock insuficiente para ${product.name}. Se agregó hasta el disponible (${effectiveStock}).`);
               updatedCart[existingIdx].quantity = effectiveStock;
@@ -235,7 +226,7 @@ export default function PuntoDeVenta() {
               updatedCart[existingIdx].quantity = newQty;
             }
           } else {
-            if ((item.quantity_prescribed || 1) > effectiveStock && effectiveStock <= 0) {
+            if (remaining > effectiveStock && effectiveStock <= 0) {
               alert(`Sin stock disponible para ${product.name}. Se omite.`);
               continue;
             }
@@ -243,17 +234,17 @@ export default function PuntoDeVenta() {
               ...product,
               price_sale: effectivePrice,
               stock_disponible: effectiveStock,
-              quantity: Math.min(item.quantity_prescribed || 1, effectiveStock || 999),
+              quantity: Math.min(remaining, effectiveStock || 999),
               prescription_id: prescription.id,
               correlativo_asociado: prescription.folio_electronico,
               validation_rut: prescription.prescriber_rut,
-              max_prescription_qty: item.quantity_prescribed || 1
+              max_prescription_qty: remaining
             });
           }
         }
       }
       setCart(updatedCart);
-      setPendingRecipesModal({ open: false, prescriptions: [], loading: false });
+      setPendingRecipesModal({ open: false, prescriptions: [], loading: false, selected: new Set(), detailPrescription: null });
     } catch (err) {
       console.error("Error cargando recetas pendientes:", err);
       setPendingRecipesModal(prev => ({ ...prev, loading: false }));
@@ -283,12 +274,12 @@ export default function PuntoDeVenta() {
     
     if (condition === 'R' || condition === 'RECETA_SIMPLE') { 
       setValidationModal(prev => ({ ...prev, isOpen: true, type: 'R', product, activeTab: 'EXPRESS' })); 
-      setExpressFormData({ rut: '', nombre: '', folio: '', patientRut: '', patientNombre: '' });
+      setExpressFormData({ rut: '', nombre: '', folio: '', patientRut: '', patientNombre: '', institution: '' });
+      setExpressSearch({ patientResults: [], doctorResults: [], selectedPatientId: null, selectedDoctorId: null, searchingPatient: false, searchingDoctor: false });
       return; 
     }
     if (condition === 'RR' || condition === 'RCH' || condition === 'RECETA_RETENIDA' || condition === 'RECETA_CHEQUE') {
       setValidationModal(prev => ({ ...prev, isOpen: true, type: 'RR', product, activeTab: 'LLAMAR' })); 
-      setSelectedPrescription(''); 
       return;
     }
     // Default: agregar sin validación
@@ -325,7 +316,12 @@ export default function PuntoDeVenta() {
     }
 
     if (existing) {
-      setCart(cart.map(item => item.id === product.id ? { ...item, quantity: Number(item.quantity || 0) + 1 } : item));
+      const newQty = Number(existing.quantity || 0) + 1;
+      if (existing.max_prescription_qty && newQty > existing.max_prescription_qty) {
+        alert(`No puede vender más de lo indicado en la receta médica (máx. ${existing.max_prescription_qty}).`);
+        return;
+      }
+      setCart(cart.map(item => item.id === product.id ? { ...item, quantity: newQty } : item));
     } else {
       setCart(prev => [...prev, {
         ...product,
@@ -363,7 +359,18 @@ export default function PuntoDeVenta() {
     setCart(cart.map(c => c.id === id ? { ...c, quantity: qty } : c));
   };
 
-  const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
+  const removeFromCart = (id) => {
+    // Si el ítem eliminado tenía una receta express, liberarla del set para que pueda aparecer en pendientes
+    const removedItem = cart.find(item => item.id === id);
+    if (removedItem?.prescription_id && removedItem?.es_receta_express) {
+      setExpressCreatedPrescriptionIds(prev => {
+        const next = new Set(prev);
+        next.delete(removedItem.prescription_id);
+        return next;
+      });
+    }
+    setCart(cart.filter(item => item.id !== id));
+  };
 
   const calculateTotal = () => cart.reduce((acc, item) => acc + (safePrice(item) * Number(item.quantity || 0)), 0);
   const totalItems = cart.reduce((acc, item) => acc + (Number(item.quantity) || 0), 0);
@@ -385,13 +392,32 @@ export default function PuntoDeVenta() {
       }
 
       // Merge items to cart
-      const newCartItems = items.map(item => ({
-        ...item.product,
-        quantity: item.quantity_prescribed || 1,
-        prescription_id: prescription.id,
-        correlativo_asociado: prescription.folio_electronico,
-        validation_rut: prescription.prescriber_rut
-      }));
+      const newCartItems = items
+        .filter(item => (item.quantity_prescribed || 1) - (item.quantity_dispensed || 0) > 0)
+        .map(item => {
+          const remaining = (item.quantity_prescribed || 1) - (item.quantity_dispensed || 0);
+          // Enriquecer con precio y stock del catálogo POS local (igual que el modal de pendientes)
+          const enriched = products.find(p => p.id === item.product?.id);
+          const effectivePrice = enriched?.price_sale || Number(item.product?.price_sale ?? item.product?.unit_price ?? 0);
+          const effectiveStock = enriched?.stock_disponible ?? 0;
+          return {
+            ...item.product,
+            ...(enriched || {}),          // sobrescribe con datos enriquecidos del catálogo
+            price_sale: effectivePrice,
+            stock_disponible: effectiveStock,
+            quantity: Math.min(remaining, effectiveStock || 9999),
+            max_prescription_qty: remaining,
+            prescription_id: prescription.id,
+            correlativo_asociado: prescription.folio_electronico,
+            validation_rut: prescription.prescriber_rut
+          };
+        });
+
+      if (newCartItems.length === 0) {
+        alert("La receta solicitada ya fue despachada completamente.");
+        setValidationModal({ isOpen: false, type: null, product: null, activeTab: 'EXPRESS', folioSearch: '', isLoading: false });
+        return;
+      }
 
       // Append and handle duplicates (if same product with same prescription, merge quantity)
       let updatedCart = [...cart];
@@ -422,65 +448,160 @@ export default function PuntoDeVenta() {
     }
   };
 
-  const handleExpressValidate = async () => {
-    const { rut, nombre, folio, patientRut, patientNombre } = expressFormData;
-    if (!validationModal.product) return;
-
-    const missing = [];
-    if (!rut.trim()) missing.push('RUT del Médico');
-    if (!nombre.trim()) missing.push('Nombre del Médico');
-    if (!folio.trim()) missing.push('N° de Folio / Receta');
-    if (!patientRut.trim()) missing.push('RUT del Paciente');
-    if (!patientNombre.trim()) missing.push('Nombre del Paciente');
-
-    if (missing.length > 0) {
-      alert(`Campos obligatorios: ${missing.join(', ')}`);
+  // Debounced doctor search: triggers automatically on rut change (min 2 chars)
+  const handleDoctorQueryChange = (value) => {
+    setExpressFormData(prev => ({ ...prev, rut: value, nombre: expressSearch.selectedDoctorId ? prev.nombre : '' }));
+    if (expressSearch.selectedDoctorId) return; // Already selected
+    clearTimeout(doctorDebounceRef.current);
+    if (value.trim().length < 2) {
+      setExpressSearch(prev => ({ ...prev, doctorResults: [] }));
       return;
     }
+    setExpressSearch(prev => ({ ...prev, searchingDoctor: true }));
+    doctorDebounceRef.current = setTimeout(async () => {
+      const { data } = await fetchDoctors(value.trim(), 10);
+      setExpressSearch(prev => ({ ...prev, searchingDoctor: false, doctorResults: data || [] }));
+    }, 300);
+  };
+
+  // Debounced patient search: triggers automatically on patientRut/name change (min 2 chars)
+  const handlePatientQueryChange = (value) => {
+    setExpressFormData(prev => ({ ...prev, patientRut: value, patientNombre: expressSearch.selectedPatientId ? prev.patientNombre : '' }));
+    if (expressSearch.selectedPatientId) return; // Already selected
+    clearTimeout(patientDebounceRef.current);
+    if (value.trim().length < 2) {
+      setExpressSearch(prev => ({ ...prev, patientResults: [] }));
+      return;
+    }
+    setExpressSearch(prev => ({ ...prev, searchingPatient: true }));
+    patientDebounceRef.current = setTimeout(async () => {
+      const { data } = await fetchPharmacyPatients(value.trim(), 10);
+      setExpressSearch(prev => ({ ...prev, searchingPatient: false, patientResults: data || [] }));
+    }, 300);
+  };
+
+  // Keep manual search handlers as fallback (Enter key)
+  const handleExpressPatientSearch = async () => {
+    const q = expressFormData.patientRut.trim();
+    if (!q) return;
+    setExpressSearch(prev => ({ ...prev, searchingPatient: true }));
+    const { data } = await fetchPharmacyPatients(q, 10);
+    setExpressSearch(prev => ({ ...prev, searchingPatient: false, patientResults: data || [], selectedPatientId: null }));
+  };
+
+  const handleExpressDoctorSearch = async () => {
+    const q = expressFormData.rut.trim();
+    if (!q) return;
+    setExpressSearch(prev => ({ ...prev, searchingDoctor: true }));
+    const { data } = await fetchDoctors(q, 10);
+    setExpressSearch(prev => ({ ...prev, searchingDoctor: false, doctorResults: data || [], selectedDoctorId: null }));
+  };
+
+  const handleExpressValidate = async () => {
+    const { rut, nombre, folio, patientRut, patientNombre, institution } = expressFormData;
+    if (!validationModal.product) return;
+
+    if (!folio.trim()) { alert('El N° de Folio / Receta es obligatorio.'); return; }
 
     setValidationModal(prev => ({ ...prev, isLoading: true }));
     try {
-      // Buscar si el paciente ya existe por RUT
-      const { data: existingPatients } = await fetchPharmacyPatients(patientRut.trim());
-      let patient = existingPatients?.find(p => p.rut === patientRut.trim());
-
-      // Si no existe, crearlo
+      // 1. Resolver paciente: usar seleccionado, o buscar por RUT, o crear
+      let patient = null;
+      if (expressSearch.selectedPatientId) {
+        patient = expressSearch.patientResults.find(p => p.id === expressSearch.selectedPatientId);
+      }
       if (!patient) {
-        const { data: newPatient, error: createError } = await createPharmacyPatient({
-          rut: patientRut.trim(),
-          full_name: patientNombre.trim()
-        });
-        if (createError) throw createError;
-        patient = newPatient;
-        setPatients(prev => [patient, ...prev]);
-      }
-
-      // Alimentar tabla de doctores (upsert por RUT)
-      const { data: existingDoctors } = await fetchDoctors(rut.trim());
-      if (!existingDoctors?.find(d => d.rut === rut.trim())) {
-        const { error: doctorError } = await createDoctor({
-          rut: rut.trim(),
-          full_name: nombre.trim()
-        });
-        if (doctorError) console.warn("No se pudo registrar médico:", doctorError);
-      }
-
-      setSelectedPatient(patient);
-      setValidationModal(prev => ({ ...prev, isLoading: false }));
-
-      addToCart(validationModal.product, {
-        es_receta_express: true,
-        validation_rut: rut.trim(),
-        prescriber_name: nombre.trim(),
-        datos_medico: {
-          rut: rut.trim(),
-          nombre: nombre.trim(),
-          folio: folio.trim()
+        if (!patientRut.trim() || !patientNombre.trim()) {
+          alert('Debes ingresar o seleccionar un paciente (RUT y Nombre).');
+          setValidationModal(prev => ({ ...prev, isLoading: false }));
+          return;
         }
-      });
+        const { data: existing } = await fetchPharmacyPatients(patientRut.trim());
+        patient = existing?.find(p => p.rut === patientRut.trim());
+        if (!patient) {
+          const { data: newP, error: pErr } = await createPharmacyPatient({ rut: patientRut.trim(), full_name: patientNombre.trim() });
+          if (pErr) throw pErr;
+          patient = newP;
+          setPatients(prev => [patient, ...prev]);
+        }
+      }
+
+      // 2. Resolver médico: usar seleccionado, o buscar por RUT, o crear
+      let doctor = null;
+      if (expressSearch.selectedDoctorId) {
+        doctor = expressSearch.doctorResults.find(d => d.id === expressSearch.selectedDoctorId);
+      }
+      let prescriber_rut = rut.trim();
+      let prescriber_name = nombre.trim();
+      if (!prescriber_rut || !prescriber_name) {
+        alert('Debes ingresar o seleccionar un médico (RUT y Nombre).');
+        setValidationModal(prev => ({ ...prev, isLoading: false }));
+        return;
+      }
+      if (!doctor) {
+        const { data: existingDr } = await fetchDoctors(prescriber_rut);
+        doctor = existingDr?.find(d => d.rut === prescriber_rut);
+        if (!doctor) {
+          const { data: newDr, error: drErr } = await createDoctor({ rut: prescriber_rut, full_name: prescriber_name });
+          if (drErr) console.warn('No se pudo registrar médico:', drErr);
+          else doctor = newDr;
+        }
+      } else {
+        prescriber_rut = doctor.rut;
+        prescriber_name = doctor.full_name;
+      }
+
+      // 3. Crear receta real con el producto
+      const product = validationModal.product;
+      const { data: prescResult, error: prescErr } = await createPrescriptionWithItems(
+        {
+          patient_id: patient.id,
+          doctor_id: doctor?.id || null,
+          prescriber_rut,
+          prescriber_name,
+          folio_electronico: folio.trim(),
+          institution_name: institution.trim() || null,
+          issue_date: new Date().toISOString().split('T')[0]
+        },
+        [{ product_id: product.id, quantity_prescribed: 1, dosage_instructions: '' }]
+      );
+      if (prescErr) throw prescErr;
+
+      const prescriptionId = prescResult?.header?.id || prescResult?.id || null;
+
+      // Registrar esta receta como creada en express (para excluir del modal de pendientes)
+      if (prescriptionId) {
+        setExpressCreatedPrescriptionIds(prev => new Set([...prev, prescriptionId]));
+      }
+
+      // 4. Seleccionar el paciente en el POS y agregar al carrito con prescription_id
+      setSelectedPatient(patient);
+
+      // Si el producto ya está en carrito, solo actualizar su prescription_id
+      const existing = cart.find(c => c.id === product.id && !c.prescription_id);
+      if (existing) {
+        setCart(prev => prev.map(c =>
+          c.id === product.id && !c.prescription_id
+            ? { ...c, prescription_id: prescriptionId, correlativo_asociado: folio.trim(), validation_rut: prescriber_rut }
+            : c
+        ));
+      } else {
+        addToCart(product, {
+          es_receta_express: true,
+          prescription_id: prescriptionId,
+          correlativo_asociado: folio.trim(),
+          validation_rut: prescriber_rut,
+          prescriber_name,
+          datos_medico: { rut: prescriber_rut, nombre: prescriber_name, folio: folio.trim() }
+        });
+      }
+
+      setValidationModal(prev => ({ ...prev, isOpen: false, isLoading: false }));
+      setExpressFormData({ rut: '', nombre: '', folio: '', patientRut: '', patientNombre: '', institution: '' });
+      setExpressSearch({ patientResults: [], doctorResults: [], selectedPatientId: null, selectedDoctorId: null, searchingPatient: false, searchingDoctor: false });
     } catch (err) {
-      console.error("Error en validación express:", err);
-      alert("Error al registrar paciente: " + (err.message || err));
+      console.error('Error en validación express:', err);
+      alert('Error al registrar receta: ' + (err.message || err));
       setValidationModal(prev => ({ ...prev, isLoading: false }));
     }
   };
@@ -626,14 +747,24 @@ export default function PuntoDeVenta() {
         const item = updatedCart[i];
         const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
         
+        let mappedType = 'RECETA_SIMPLE';
+        if (condition === 'RR' || condition === 'RECETA_RETENIDA') mappedType = 'RECETA_RETENIDA';
+        if (condition === 'RCH' || condition === 'RECETA_CHEQUE') mappedType = 'RECETA_CHEQUE';
+
         // Si el item requiere receta y NO tiene una vinculada (o es Receta Simple)
         if (condition !== 'VD' && condition !== 'VENTA_LIBRE' && !item.prescription_id) {
-          const prescRes = await createQuickPrescription({
+          const prescRes = await createPrescriptionWithItems({
             patient_id: selectedPatient.id,
             prescriber_rut: item.validation_rut || item.datos_medico?.rut || 'POR_DEFINIR',
             prescriber_name: item.prescriber_name || item.datos_medico?.nombre || 'MÉDICO GENERAL',
             folio_electronico: item.datos_medico?.folio || `POS-${Date.now()}-${i}`
-          });
+          }, [{
+            product_id: item.id || item.product_id,
+            quantity_prescribed: item.quantity,
+            dosage_instructions: 'Generada automáticamente en POS'
+          }]);
+
+          if (prescRes.error) throw new Error(prescRes.error.message || 'No se pudo crear la receta de la venta.');
           
           if (prescRes.data) {
             updatedCart[i] = { ...item, prescription_id: prescRes.data.id };
@@ -641,17 +772,28 @@ export default function PuntoDeVenta() {
         }
       }
 
+      const usedPrescriptionIds = new Set(updatedCart.map(item => item.prescription_id).filter(Boolean));
       const saleHeader = {
         ...modalSaleHeader,
-        patient_id: selectedPatient.id
+        patient_id: selectedPatient.id,
+        prescription_id: modalSaleHeader.prescription_id || [...usedPrescriptionIds][0] || null,
+        session_id: activeSession?.id || null,
+        operator_id: activeSession?.operator_id || activeSession?.operator?.id || null
       };
 
       const sale = await createSaleWithItems(saleHeader, updatedCart, activeWarehouse.id);
-      alert(`Venta #${sale.id.slice(0,8)} procesada correctamente.`);
+      const saleId = sale?.id || sale?.sale_id || sale?.sale?.id || '';
+      alert(`Venta #${saleId.slice(0,8) || 'OK'} procesada correctamente.`);
       
       setCart([]);
+      setExpressCreatedPrescriptionIds(new Set()); // Limpiar IDs de recetas express al finalizar venta
       setShowCheckoutModal(false);
       setSelectedPatient({ id: null, full_name: 'PÚBLICO GENERAL', rut: '1-9' });
+      setPendingRecipesModal(prev => ({
+        open: false,
+        prescriptions: (prev.prescriptions || []).filter(p => !usedPrescriptionIds.has(p.id)),
+        loading: false
+      }));
       loadInitialData();
     } catch (err) {
       console.error("ERROR CRÍTICO VENTA:", err);
@@ -678,16 +820,81 @@ export default function PuntoDeVenta() {
     return c;
   };
 
-  const filteredProducts = products.filter(p =>
-    p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.dci?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.barcode?.includes(searchTerm) ||
-    p.barcode_purchase?.includes(searchTerm)
-  );
+  const filteredProducts = products;
 
   const handleSearchKeyDown = (e) => {
-    if (e.key === 'Enter' && filteredProducts.length === 1) tryAddToCart(filteredProducts[0]);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev < filteredProducts.length - 1 ? prev + 1 : prev));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev > 0 ? prev - 1 : prev));
+    } else if (e.key === 'Enter') {
+      if (filteredProducts.length > 0) {
+        const selected = filteredProducts[selectedIndex];
+        if (selected) {
+          if (selected.stock_disponible > 0) {
+            tryAddToCart(selected);
+          } else {
+            // No hacer nada o alertar si se intenta agregar sin stock
+          }
+        }
+      }
+    } else if (e.key === 'Escape') {
+      setShowSearchModal(false);
+      setSearchTerm('');
+    }
   };
+
+  // Búsqueda server-side con debounce
+  const searchTimer = useRef(null);
+  useEffect(() => {
+    if (!activeWarehouse?.id || !showSearchModal) return;
+    
+    const term = searchTerm.trim();
+    
+    // Si el término es vacío, volvemos a cargar los productos iniciales
+    if (term.length === 0) {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+      searchTimer.current = setTimeout(async () => {
+        setSearchLoading(true);
+        try {
+          const result = await fetchPosProducts(activeWarehouse.id, '', 30);
+          if (result) {
+            setProducts(result);
+            setSelectedIndex(0);
+          }
+        } catch (err) {
+          console.error("Error en reset búsqueda POS:", err);
+        } finally {
+          setSearchLoading(false);
+        }
+      }, 150);
+      return;
+    }
+    
+    if (term.length < 2) return;
+
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    
+    searchTimer.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        // Limitamos a 30 resultados para el modal
+        const result = await fetchPosProducts(activeWarehouse.id, term, 30);
+        if (result) {
+          setProducts(result);
+          setSelectedIndex(0); // Resetear selección al encontrar nuevos resultados
+        }
+      } catch (err) {
+        console.error("Error en búsqueda POS:", err);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+
+    return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+  }, [searchTerm, activeWarehouse?.id, showSearchModal]);
 
   const fmtCLP = (n) => `$${Number(n || 0).toLocaleString('es-CL')}`;
 
@@ -865,79 +1072,107 @@ export default function PuntoDeVenta() {
       {/* MODAL: BÚSQUEDA DE PRODUCTOS (F1)                                */}
       {/* ══════════════════════════════════════════════════════════════════ */}
       {showSearchModal && (
-        <div className="fixed inset-0 z-[100] flex items-start justify-center bg-slate-900/70 backdrop-blur-sm pt-[5vh]"
+        <div className="fixed inset-0 z-[100] flex items-start justify-center bg-slate-900/60 backdrop-blur-sm pt-[100px]"
           onClick={(e) => { if (e.target === e.currentTarget) setShowSearchModal(false); }}>
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[75vh] flex flex-col overflow-hidden border border-slate-200 animate-in fade-in slide-in-from-top-4 duration-300">
             <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100 bg-slate-50">
-              <Barcode size={20} className="text-emerald-500 shrink-0" />
+              <Search size={22} className="text-emerald-500 shrink-0" />
               <input ref={searchInputRef} type="text"
-                placeholder="Nombre, DCI o código de barras... (Enter si hay 1 resultado)"
-                className="flex-1 bg-transparent text-lg font-medium outline-none placeholder-slate-300"
-                value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} onKeyDown={handleSearchKeyDown} />
+                placeholder="Busque por Nombre, DCI, Código o Laboratorio..."
+                className="flex-1 bg-transparent text-xl font-bold outline-none placeholder-slate-300 text-slate-700"
+                value={searchTerm} 
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setSelectedIndex(0);
+                }} 
+                onKeyDown={handleSearchKeyDown} 
+              />
+              {searchLoading && <Loader2 size={20} className="animate-spin text-emerald-500" />}
               <button onClick={() => { setShowSearchModal(false); setSearchTerm(''); }}
                 className="p-2 hover:bg-slate-200 rounded-xl transition-colors"><X size={20} className="text-slate-400" /></button>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {loading ? (
-                <div className="py-20 text-center text-slate-300"><Loader2 size={32} className="animate-spin mx-auto mb-3" />
-                  <p className="text-sm font-bold uppercase tracking-widest">Consultando inventario...</p></div>
-              ) : filteredProducts.length === 0 ? (
-                <div className="py-20 text-center text-slate-300">
-                  <Package size={48} className="mx-auto mb-3 opacity-20" />
-                  <p className="text-sm font-bold">Sin resultados para "{searchTerm}"</p></div>
+              {filteredProducts.length === 0 && !searchLoading ? (
+                <div className="py-24 text-center text-slate-300">
+                  <Package size={64} className="mx-auto mb-4 opacity-10" />
+                  <p className="text-lg font-black uppercase tracking-widest text-slate-200">No se encontraron productos</p>
+                  <p className="text-sm font-medium mt-2">Intente con otros términos de búsqueda</p>
+                </div>
               ) : (
                 <table className="w-full">
-                  <thead className="sticky top-0 bg-slate-50 border-b border-slate-100 z-10">
+                  <thead className="sticky top-0 bg-slate-50/90 backdrop-blur-md border-b border-slate-100 z-10">
                     <tr>
-                      <th className="px-6 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">Producto / DCI</th>
-                      <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Cond.</th>
-                      <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Disponible</th>
-                      <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">P. Venta</th>
-                      <th className="px-4 py-3 w-16"></th>
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">Producto / DCI</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Cond.</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Disponible</th>
+                      <th className="px-4 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Precio</th>
+                      <th className="px-4 py-4 w-16"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
-                    {filteredProducts.map(p => (
-                      <tr key={p.id} className="hover:bg-emerald-50/40 transition-colors cursor-pointer" onClick={() => tryAddToCart(p)}>
-                        <td className="px-6 py-4">
-                          <span className="font-bold text-slate-800 block">{p.name}</span>
-                          <span className="text-xs text-slate-400 italic">{p.dci || 'Sin DCI'}</span>
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black border ${getBadgeColor(p.sale_condition || p.prescription_type)}`}>
-                            {getConditionLabel(p)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                          <div className="flex flex-col items-center gap-1">
-                            <span className={`font-mono font-bold ${p.stock_disponible <= 5 ? 'text-red-500' : 'text-slate-600'}`}>
-                              Disponible: {p.stock_disponible}
+                    {filteredProducts.map((p, idx) => {
+                      const isSelected = idx === selectedIndex;
+                      const hasStock = (p.stock_disponible || 0) > 0;
+                      return (
+                        <tr key={p.id} 
+                          className={`transition-colors cursor-pointer ${isSelected ? 'bg-emerald-600/10' : 'hover:bg-slate-50'}`}
+                          onClick={() => hasStock && tryAddToCart(p)}
+                          onMouseEnter={() => setSelectedIndex(idx)}
+                        >
+                          <td className="px-6 py-5">
+                            <div className="flex items-center gap-3">
+                              {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+                              <div>
+                                <span className={`font-black block text-sm ${isSelected ? 'text-emerald-700' : 'text-slate-700'}`}>{p.name}</span>
+                                <span className="text-[11px] text-slate-400 font-medium uppercase tracking-tight">{p.dci || 'Sin DCI'}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-5 text-center">
+                            <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black border ${getBadgeColor(p.sale_condition || p.prescription_type)}`}>
+                              {getConditionLabel(p)}
                             </span>
-                            {p.stock_cuarentena > 0 && (
-                              <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[10px] font-black text-orange-700">
-                                ⚠️ {p.stock_cuarentena} en Cuarentena
+                          </td>
+                          <td className="px-4 py-5 text-center">
+                            <div className="flex flex-col items-center">
+                              <span className={`font-mono font-bold text-sm ${!hasStock ? 'text-red-400' : p.stock_disponible <= 5 ? 'text-orange-500' : 'text-slate-600'}`}>
+                                {p.stock_disponible}
                               </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 text-right font-black">
-                          <span className={Number(p.price_sale) <= 0 ? 'text-red-400 italic text-[10px]' : 'text-slate-700'}>
-                            {Number(p.price_sale) <= 0 ? 'Sin Precio' : fmtCLP(p.price_sale)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                          <button className="w-11 h-11 flex items-center justify-center bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-600 hover:text-white transition-all active:scale-90">
-                            <Plus size={20} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                              {!hasStock && <span className="text-[9px] font-black text-red-400 uppercase">Sin Stock</span>}
+                            </div>
+                          </td>
+                          <td className="px-4 py-5 text-right font-black">
+                            <span className={Number(p.price_sale) <= 0 ? 'text-red-400 italic text-[10px]' : 'text-slate-700 text-base'}>
+                              {Number(p.price_sale) <= 0 ? 'Sin Precio' : fmtCLP(p.price_sale)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-5 text-center">
+                            <button 
+                              disabled={!hasStock}
+                              className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all active:scale-90 ${
+                                !hasStock 
+                                ? 'bg-slate-50 text-slate-200 cursor-not-allowed' 
+                                : isSelected 
+                                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200' 
+                                  : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                              }`}
+                            >
+                              <Plus size={18} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
             </div>
-            <div className="px-6 py-3 bg-slate-50 border-t text-[10px] font-bold text-slate-400 text-center uppercase tracking-widest">
-              {filteredProducts.length} producto{filteredProducts.length !== 1 ? 's' : ''} · Clic o Enter para agregar · ESC para cerrar
+            <div className="px-6 py-4 bg-slate-50 border-t flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              <div>{filteredProducts.length} producto{filteredProducts.length !== 1 ? 's' : ''} encontrados</div>
+              <div className="flex gap-4">
+                <span className="flex items-center gap-1"><Keyboard size={12} /> flechas para navegar</span>
+                <span className="flex items-center gap-1"><ArrowLeft size={12} /> enter para agregar</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1019,24 +1254,54 @@ export default function PuntoDeVenta() {
                       </p>
                     </div>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">RUT del Médico</label>
-                        <input type="text" placeholder="Ej: 12.345.678-9" autoFocus
-                          className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] transition-all font-mono font-bold text-sm"
-                          value={expressFormData.rut}
-                          onChange={(e) => setExpressFormData(prev => ({ ...prev, rut: e.target.value }))}
-                        />
+                      {/* MÉDICO */}
+                      <div className="border border-slate-200 rounded-xl overflow-hidden">
+                        <div className="bg-slate-50 px-4 py-2 border-b border-slate-100">
+                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Médico Prescriptor</p>
+                        </div>
+                        <div className="p-4 space-y-3">
+                          {expressSearch.selectedDoctorId ? (
+                            <div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-lg px-4 py-3">
+                              <div>
+                                <p className="font-black text-sm text-slate-800">{expressSearch.doctorResults.find(d => d.id === expressSearch.selectedDoctorId)?.full_name}</p>
+                                <p className="text-[10px] text-slate-500 font-mono">{expressSearch.doctorResults.find(d => d.id === expressSearch.selectedDoctorId)?.rut}</p>
+                              </div>
+                              <button onClick={() => setExpressSearch(prev => ({ ...prev, selectedDoctorId: null, doctorResults: [] }))} className="text-[10px] text-red-400 font-black uppercase hover:text-red-600">Cambiar</button>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex gap-2">
+                                <input type="text" placeholder="RUT o nombre del médico" autoFocus
+                                  className="flex-1 py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] font-mono font-bold text-sm transition-all"
+                                  value={expressFormData.rut}
+                                  onChange={(e) => handleDoctorQueryChange(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') handleExpressDoctorSearch(); }}
+                                />
+                                {expressSearch.searchingDoctor && <div className="flex items-center px-3"><Loader2 size={16} className="animate-spin text-[#4C3073]"/></div>}
+                              </div>
+                              <p className="text-[10px] text-slate-400">Formato RUT: 12.345.678-9 · Busca por RUT o nombre</p>
+                              {expressSearch.doctorResults.length > 0 && (
+                                <div className="border border-slate-100 rounded-lg overflow-hidden max-h-28 overflow-y-auto">
+                                  {expressSearch.doctorResults.map(d => (
+                                    <button key={d.id} type="button" onClick={() => { setExpressSearch(prev => ({ ...prev, selectedDoctorId: d.id })); setExpressFormData(prev => ({ ...prev, rut: d.rut, nombre: d.full_name })); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 border-b last:border-0 flex justify-between items-center">
+                                      <span className="font-bold text-sm text-slate-800">{d.full_name}</span>
+                                      <span className="text-[10px] text-slate-400 font-mono">{d.rut}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              <input type="text" placeholder="Nombre del médico (para crear nuevo)"
+                                className="w-full py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] font-bold text-sm transition-all"
+                                value={expressFormData.nombre}
+                                onChange={(e) => setExpressFormData(prev => ({ ...prev, nombre: e.target.value }))}
+                              />
+                            </>
+                          )}
+                        </div>
                       </div>
+                      {/* FOLIO */}
                       <div>
-                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Nombre del Médico</label>
-                        <input type="text" placeholder="Dr. Juan Pérez"
-                          className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] transition-all font-bold text-sm"
-                          value={expressFormData.nombre}
-                          onChange={(e) => setExpressFormData(prev => ({ ...prev, nombre: e.target.value }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">N° de Folio / Receta</label>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">N° de Folio / Receta *</label>
                         <input type="text" placeholder="Ej: REC-10045"
                           className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] transition-all font-mono font-bold text-sm"
                           value={expressFormData.folio}
@@ -1044,27 +1309,49 @@ export default function PuntoDeVenta() {
                           onKeyDown={(e) => { if (e.key === 'Enter') handleExpressValidate(); }}
                         />
                       </div>
-                      {/* --- SECCIÓN PACIENTE --- */}
-                      <div className="border-t border-slate-100 pt-4">
-                        <h4 className="text-[10px] font-black text-slate-800 uppercase mb-3 tracking-widest text-center">Datos del Paciente</h4>
-                        <div className="space-y-3">
-                          <div>
-                            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">RUT del Paciente</label>
-                            <input type="text" placeholder="Ej: 12.345.678-9"
-                              className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-mono font-bold text-sm"
-                              value={expressFormData.patientRut}
-                              onChange={(e) => setExpressFormData(prev => ({ ...prev, patientRut: e.target.value }))}
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Nombre del Paciente</label>
-                            <input type="text" placeholder="Ej: Juan Pérez"
-                              className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-bold text-sm"
-                              value={expressFormData.patientNombre}
-                              onChange={(e) => setExpressFormData(prev => ({ ...prev, patientNombre: e.target.value }))}
-                              onKeyDown={(e) => { if (e.key === 'Enter') handleExpressValidate(); }}
-                            />
-                          </div>
+                      {/* PACIENTE */}
+                      <div className="border border-slate-200 rounded-xl overflow-hidden">
+                        <div className="bg-slate-50 px-4 py-2 border-b border-slate-100">
+                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Paciente</p>
+                        </div>
+                        <div className="p-4 space-y-3">
+                          {expressSearch.selectedPatientId ? (
+                            <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
+                              <div>
+                                <p className="font-black text-sm text-slate-800">{expressSearch.patientResults.find(p => p.id === expressSearch.selectedPatientId)?.full_name}</p>
+                                <p className="text-[10px] text-slate-500 font-mono">{expressSearch.patientResults.find(p => p.id === expressSearch.selectedPatientId)?.rut}</p>
+                              </div>
+                              <button onClick={() => setExpressSearch(prev => ({ ...prev, selectedPatientId: null, patientResults: [] }))} className="text-[10px] text-red-400 font-black uppercase hover:text-red-600">Cambiar</button>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex gap-2">
+                                <input type="text" placeholder="RUT o nombre del paciente"
+                                  className="flex-1 py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 font-mono font-bold text-sm transition-all"
+                                  value={expressFormData.patientRut}
+                                  onChange={(e) => handlePatientQueryChange(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') handleExpressPatientSearch(); }}
+                                />
+                                {expressSearch.searchingPatient && <div className="flex items-center px-3"><Loader2 size={16} className="animate-spin text-emerald-600"/></div>}
+                              </div>
+                              <p className="text-[10px] text-slate-400">Formato RUT: 12.345.678-9 · Busca por RUT o nombre</p>
+                              {expressSearch.patientResults.length > 0 && (
+                                <div className="border border-slate-100 rounded-lg overflow-hidden max-h-28 overflow-y-auto">
+                                  {expressSearch.patientResults.map(p => (
+                                    <button key={p.id} type="button" onClick={() => { setExpressSearch(prev => ({ ...prev, selectedPatientId: p.id })); setExpressFormData(prev => ({ ...prev, patientRut: p.rut, patientNombre: p.full_name })); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 border-b last:border-0 flex justify-between items-center">
+                                      <span className="font-bold text-sm text-slate-800">{p.full_name}</span>
+                                      <span className="text-[10px] text-slate-400 font-mono">{p.rut}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              <input type="text" placeholder="Nombre del paciente (para crear nuevo)"
+                                className="w-full py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 font-bold text-sm transition-all"
+                                value={expressFormData.patientNombre}
+                                onChange={(e) => setExpressFormData(prev => ({ ...prev, patientNombre: e.target.value }))}
+                              />
+                            </>
+                          )}
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
@@ -1074,11 +1361,17 @@ export default function PuntoDeVenta() {
                         >
                           Cancelar
                         </button>
-                        <button 
+                      <button 
                           onClick={handleExpressValidate}
-                          className="py-3 bg-[#4C3073] text-white rounded-xl font-black shadow-lg hover:brightness-110 transition-all"
+                          disabled={
+                            validationModal.isLoading ||
+                            !expressFormData.folio.trim() ||
+                            !(expressSearch.selectedDoctorId || (expressFormData.rut.trim() && expressFormData.nombre.trim())) ||
+                            !(expressSearch.selectedPatientId || (expressFormData.patientRut.trim() && expressFormData.patientNombre.trim()))
+                          }
+                          className="py-3 bg-[#4C3073] text-white rounded-xl font-black shadow-lg hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                         >
-                          VALIDAR Y AGREGAR
+                          {validationModal.isLoading ? <Loader2 size={16} className="animate-spin"/> : 'VALIDAR Y AGREGAR'}
                         </button>
                       </div>
                     </div>
@@ -1221,54 +1514,126 @@ export default function PuntoDeVenta() {
       {/* MODAL: RECETAS PENDIENTES DEL PACIENTE (Puente Inteligente) */}
       {pendingRecipesModal.open && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border-t-8 border-[#4C3073]">
-            <div className="p-8">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-3 bg-purple-50 text-[#4C3073] rounded-2xl"><ShieldAlert size={24}/></div>
-                <div>
-                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Recetas Pendientes</h3>
-                  <p className="text-xs text-slate-400 font-bold uppercase mt-1">
-                    {selectedPatient?.full_name} tiene {pendingRecipesModal.prescriptions.length} receta(s) pre-ingresada(s)
-                  </p>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden border-t-8 border-[#4C3073] flex flex-col max-h-[90vh]">
+            {pendingRecipesModal.detailPrescription ? (
+              <div className="p-8 flex flex-col h-full overflow-hidden">
+                <div className="flex items-center gap-3 mb-6 shrink-0">
+                  <button onClick={() => setPendingRecipesModal(prev => ({ ...prev, detailPrescription: null }))} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ArrowLeft size={20} /></button>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Detalle de Receta</h3>
+                    <p className="text-xs text-slate-400 font-bold uppercase mt-1">
+                      {pendingRecipesModal.detailPrescription.folio_electronico} · Dr. {pendingRecipesModal.detailPrescription.prescriber_name}
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto mb-6">
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <div className="bg-slate-50 p-4 rounded-xl">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase">Tipo</p>
+                      <p className="font-black text-slate-800">{pendingRecipesModal.detailPrescription.prescription_type || 'SIMPLE'}</p>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-xl">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase">Fecha Emisión</p>
+                      <p className="font-black text-slate-800">{new Date(pendingRecipesModal.detailPrescription.created_at).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                  
+                  <h4 className="text-sm font-black text-slate-800 uppercase mb-3 border-b pb-2">Productos ({pendingRecipesModal.detailPrescription.items?.length || 0})</h4>
+                  <div className="space-y-3">
+                    {pendingRecipesModal.detailPrescription.items?.map((item, idx) => {
+                      const maxQty = item.quantity_prescribed || 1;
+                      const dispQty = item.quantity_dispensed || 0;
+                      const pending = Math.max(0, maxQty - dispQty);
+                      return (
+                        <div key={idx} className="bg-white border border-slate-200 rounded-xl p-4 flex justify-between items-center">
+                          <div>
+                            <p className="font-bold text-sm text-slate-800 uppercase">{item.product?.name}</p>
+                            <p className="text-xs text-slate-500">{item.dosage_instructions}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] text-slate-400 uppercase font-bold">Cantidades</p>
+                            <p className="text-xs font-black text-slate-700">Prescrito: {maxQty} | Despachado: {dispQty}</p>
+                            <p className={`text-sm font-black mt-1 ${pending > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>Pendiente: {pending}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
-
-              <div className="space-y-3 max-h-60 overflow-y-auto mb-6">
-                {pendingRecipesModal.prescriptions.map(p => (
-                  <div key={p.id} className="flex items-center justify-between p-3 bg-purple-50 border border-purple-100 rounded-xl">
+            ) : (
+              <div className="p-8 flex flex-col h-full overflow-hidden">
+                <div className="flex items-center justify-between mb-6 shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-purple-50 text-[#4C3073] rounded-2xl"><ShieldAlert size={24}/></div>
                     <div>
-                      <p className="font-black text-slate-800 text-sm">{p.folio_electronico}</p>
-                      <p className="text-[10px] text-slate-500 font-bold uppercase">
-                        Dr. {p.prescriber_name} · {new Date(p.created_at).toLocaleDateString()}
+                      <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Recetas Pendientes</h3>
+                      <p className="text-xs text-slate-400 font-bold uppercase mt-1">
+                        {selectedPatient?.full_name}
                       </p>
                     </div>
-                    <span className="text-[10px] font-black bg-yellow-200 text-yellow-800 px-2 py-1 rounded-md uppercase">
-                      {p.status}
-                    </span>
                   </div>
-                ))}
-              </div>
+                </div>
 
-              <p className="text-sm text-slate-500 italic text-center mb-4">
-                Se cargarán los productos al carrito sin borrar lo ya escaneado.
-              </p>
+                <div className="flex-1 overflow-y-auto space-y-3 mb-6">
+                  {pendingRecipesModal.prescriptions.map(p => {
+                    const isSelected = pendingRecipesModal.selected.has(p.id);
+                    return (
+                      <div key={p.id} className={`flex items-center justify-between p-4 border rounded-xl transition-all cursor-pointer ${isSelected ? 'bg-purple-50 border-purple-300' : 'bg-white border-slate-200 hover:border-purple-200'}`} onClick={() => {
+                        const newSet = new Set(pendingRecipesModal.selected);
+                        if (newSet.has(p.id)) newSet.delete(p.id);
+                        else newSet.add(p.id);
+                        setPendingRecipesModal(prev => ({ ...prev, selected: newSet }));
+                      }}>
+                        <div className="flex items-center gap-4">
+                          <div className={`w-5 h-5 rounded border flex items-center justify-center ${isSelected ? 'bg-[#4C3073] border-[#4C3073]' : 'border-slate-300'}`}>
+                            {isSelected && <CheckCircle2 size={14} className="text-white" />}
+                          </div>
+                          <div>
+                            <p className="font-black text-slate-800 text-sm">{p.folio_electronico}</p>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase">
+                              Dr. {p.prescriber_name} · {new Date(p.created_at).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] font-black bg-yellow-200 text-yellow-800 px-2 py-1 rounded-md uppercase">
+                            {p.status}
+                          </span>
+                          <button onClick={(e) => { e.stopPropagation(); setPendingRecipesModal(prev => ({ ...prev, detailPrescription: p })); }} className="text-[10px] font-black uppercase text-[#4C3073] hover:underline px-2 py-1">
+                            Ver detalle
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  onClick={() => setPendingRecipesModal({ open: false, prescriptions: [], loading: false })}
-                  className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
-                >
-                  Ignorar
-                </button>
-                <button
-                  onClick={handleLoadPendingRecipes}
-                  disabled={pendingRecipesModal.loading}
-                  className="py-3 bg-[#4C3073] text-white rounded-xl font-black shadow-lg hover:brightness-110 transition-all flex items-center justify-center gap-2"
-                >
-                  {pendingRecipesModal.loading ? <Loader2 size={16} className="animate-spin"/> : 'CARGAR RECETAS'}
-                </button>
+                <div className="shrink-0">
+                  <div className="flex gap-2 mb-4">
+                    <button onClick={() => setPendingRecipesModal(prev => ({ ...prev, selected: new Set(prev.prescriptions.map(p => p.id)) }))} className="text-[10px] font-bold text-slate-500 hover:text-slate-800 uppercase px-2 py-1 bg-slate-100 rounded">Seleccionar todas</button>
+                    <button onClick={() => setPendingRecipesModal(prev => ({ ...prev, selected: new Set() }))} className="text-[10px] font-bold text-slate-500 hover:text-slate-800 uppercase px-2 py-1 bg-slate-100 rounded">Deseleccionar todas</button>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <button
+                      onClick={() => setPendingRecipesModal({ open: false, prescriptions: [], loading: false, selected: new Set(), detailPrescription: null })}
+                      className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
+                    >
+                      Ignorar
+                    </button>
+                    <button
+                      onClick={handleLoadPendingRecipes}
+                      disabled={pendingRecipesModal.loading || pendingRecipesModal.selected.size === 0}
+                      className="py-3 bg-[#4C3073] text-white rounded-xl font-black shadow-lg hover:brightness-110 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {pendingRecipesModal.loading ? <Loader2 size={16} className="animate-spin"/> : `CARGAR SELECCIONADAS (${pendingRecipesModal.selected.size})`}
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}

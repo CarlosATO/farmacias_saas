@@ -107,7 +107,6 @@ export default function GestionPrecios() {
 
             // 1. Intentar actualizar el registro existente
             const updatePayload = { price_sale: parsedPrice };
-            console.log("INTENTANDO UPDATE:", { product_id: productId, warehouse_id: warehouseId, ...updatePayload });
 
             const { data: updatedData, error: updateErr } = await getPharmacySchema()
                 .from('product_prices')
@@ -129,8 +128,6 @@ export default function GestionPrecios() {
                     warehouse_id: warehouseId,
                     price_sale: parsedPrice
                 };
-                console.log("INTENTANDO INSERT:", insertPayload);
-
                 const { error: insertErr } = await getPharmacySchema()
                     .from('product_prices')
                     .insert([insertPayload]);
@@ -256,7 +253,6 @@ export default function GestionPrecios() {
 
                 // 1. Intentar actualizar el registro existente
                 const updatePayload = { price_sale: parsedPrice };
-                console.log("INTENTANDO UPDATE:", { product_id: id, warehouse_id: warehouseId, ...updatePayload });
 
                 const { data: updatedData, error: updateErr } = await schema
                     .from('product_prices')
@@ -278,7 +274,6 @@ export default function GestionPrecios() {
                         warehouse_id: warehouseId,
                         price_sale: parsedPrice
                     };
-                    console.log("INTENTANDO INSERT:", insertPayload);
 
                     const { error: insertErr } = await schema
                         .from('product_prices')

@@ -8,7 +8,8 @@ import {
   fetchPrescriptionItems,
   fetchDoctors,
   createDoctor,
-  createPharmacyPatient
+  createPharmacyPatient,
+  derivePrescriptionTypeFromItems
 } from '../api/pharmacyClient';
 
 export default function Recetas() {
@@ -21,7 +22,6 @@ export default function Recetas() {
   
   const [view, setView] = useState('list'); // 'list', 'create', 'detail'
   
-  // Registro
   const [formData, setFormData] = useState({
     folio_electronico: '',
     prescriber_rut: '',
@@ -30,6 +30,22 @@ export default function Recetas() {
     status: 'PENDING'
   });
   const [selectedItems, setSelectedItems] = useState([]); 
+  const [derivedType, setDerivedType] = useState('RECETA_SIMPLE');
+
+  useEffect(() => {
+    const recalculateType = async () => {
+      if (selectedItems.length === 0) {
+        setDerivedType('RECETA_SIMPLE');
+        return;
+      }
+      const newType = await derivePrescriptionTypeFromItems(selectedItems);
+      if (newType) {
+        setDerivedType(newType);
+      }
+    };
+    recalculateType();
+  }, [selectedItems]);
+
   
   // Modal de Detalle
   const [detailPrescription, setDetailPrescription] = useState(null);
@@ -90,6 +106,8 @@ export default function Recetas() {
     setSelectedItems([...selectedItems, {
       product_id: product.id,
       product_name: product.name,
+      sale_condition: product.sale_condition,
+      is_controlled: product.is_controlled,
       quantity_prescribed: 1,
       dosage_instructions: ''
     }]);
@@ -201,6 +219,7 @@ export default function Recetas() {
       status: 'PENDING'
     });
     setSelectedItems([]);
+    setDerivedType('RECETA_SIMPLE');
     setFormError(null);
     setSavedFolio(null);
     setPatientSearch('');
@@ -247,6 +266,7 @@ export default function Recetas() {
   const getStatusBadge = (status) => {
     const colors = {
       'PENDING': 'bg-yellow-100 text-yellow-800',
+      'PARTIAL': 'bg-blue-100 text-blue-800',
       'DISPENSED': 'bg-green-100 text-green-800',
       'CANCELLED': 'bg-red-100 text-red-800'
     };
@@ -255,7 +275,7 @@ export default function Recetas() {
 
   if (view === 'create') {
     return (
-      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60]">
+      <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden animate-in fade-in duration-150">
         <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
             <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                 <span className="hover:text-gray-900 cursor-pointer" onClick={() => { setView('list'); resetForm(); }}>Gestión de Recetas</span>
@@ -313,6 +333,14 @@ export default function Recetas() {
                                 <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Folio Electrónico</label>
                                 <input type="text" name="folio_electronico" required value={formData.folio_electronico} onChange={handleInputChange} 
                                 className="w-full px-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073] outline-none" placeholder="REC-001" />
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Tipo requerido</label>
+                                <div className="w-full px-3 py-2 border border-gray-200 bg-gray-50 rounded-sm text-sm font-bold text-[#4C3073] flex items-center gap-2">
+                                  <ShieldAlert size={14} className="text-purple-500"/>
+                                  {derivedType === 'RECETA_RETENIDA' ? 'RETENIDA' : derivedType === 'RECETA_CHEQUE' ? 'CHEQUE' : 'RECETA_SIMPLE'}
+                                </div>
                             </div>
 
                             {/* ── SELECTOR DE PACIENTE CON BÚSQUEDA + BOTÓN "+" ── */}
@@ -544,7 +572,7 @@ export default function Recetas() {
 
   if (view === 'detail' && detailPrescription) {
     return (
-      <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60]">
+      <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden animate-in fade-in duration-150">
         <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
             <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                 <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('list')}>Gestión de Recetas</span>
@@ -581,6 +609,7 @@ export default function Recetas() {
                             <tr className="border-b border-gray-200 text-gray-500 text-left font-bold text-[11px] uppercase tracking-widest">
                                 <th className="py-3 px-4">Producto</th>
                                 <th className="py-3 px-4 text-center">Cant.</th>
+                                <th className="py-3 px-4 text-center">Despachado</th>
                                 <th className="py-3 px-4">Indicaciones</th>
                             </tr>
                         </thead>
@@ -594,6 +623,7 @@ export default function Recetas() {
                                         {item.product?.name}
                                     </td>
                                     <td className="py-4 px-4 text-center font-black text-gray-900">{item.quantity_prescribed}</td>
+                                    <td className="py-4 px-4 text-center font-black text-blue-600">{item.quantity_dispensed || 0}</td>
                                     <td className="py-4 px-4 italic text-gray-500">{item.dosage_instructions || 'Sin instrucciones adicionales'}</td>
                                 </tr>
                             ))}
@@ -670,6 +700,10 @@ export default function Recetas() {
                 </td>
                 <td className="px-4 py-4">
                   {getStatusBadge(p.status)}
+                  <p className="text-[10px] text-gray-500 mt-1 font-bold">
+                    {p.prescription_type === 'RECETA_RETENIDA' ? 'RETENIDA' : 
+                     p.prescription_type === 'RECETA_CHEQUE' ? 'CHEQUE' : 'SIMPLE'}
+                  </p>
                 </td>
                 <td className="px-4 py-4 text-right">
                   <button onClick={(e) => { e.stopPropagation(); openDetail(p); }} className="text-[11px] font-bold text-[#4C3073] mr-3 uppercase tracking-wider">Ver</button>

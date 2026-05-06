@@ -63,8 +63,16 @@ export default function MapaLogistico() {
             
             const [whRes, locRes, batchRes] = await Promise.all([
                 whQuery.order('name'),
-                schema.from('locations').select('*').eq('company_id', companyId).order('name'),
-                schema.from('inventory_batches').select('location_id, id').eq('company_id', companyId).gt('current_quantity', 0)
+                (() => {
+                  let q = schema.from('locations').select('*').eq('company_id', companyId);
+                  if (activeWarehouse?.id) q = q.eq('warehouse_id', activeWarehouse.id);
+                  return q.order('name');
+                })(),
+                (() => {
+                  let q = schema.from('inventory_batches').select('location_id, id, location:location_id!inner(warehouse_id)').eq('company_id', companyId).gt('current_quantity', 0);
+                  if (activeWarehouse?.id) q = q.eq('location.warehouse_id', activeWarehouse.id);
+                  return q;
+                })()
             ]);
 
             setWarehouses(whRes.data || []);
@@ -84,7 +92,7 @@ export default function MapaLogistico() {
         } finally {
             setLoading(false);
         }
-    }, [activeWarehouse]);
+    }, [activeWarehouse?.id]);
 
     useEffect(() => {
         fetchData();

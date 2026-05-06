@@ -356,7 +356,7 @@ export default function OrdenesCompra() {
 
     if (view === 'receive' && selectedOrder) {
         return (
-            <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+            <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden animate-in fade-in duration-150">
                 {/* Control Panel Superior */}
                 <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
                     <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
@@ -691,7 +691,7 @@ export default function OrdenesCompra() {
 
     if (view === 'detail' && selectedOrder) {
         return (
-            <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+            <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden animate-in fade-in duration-150">
                 {/* Control Panel Superior */}
                 <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
                     <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
@@ -835,7 +835,7 @@ export default function OrdenesCompra() {
     }
 
     return (
-        <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden absolute inset-0 z-[60] animate-in slide-in-from-right duration-300">
+        <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden animate-in fade-in duration-150">
             <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
                 <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                     <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('list')}>Órdenes de Compra</span>
