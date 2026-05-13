@@ -251,6 +251,22 @@ export const fetchPharmacyProducts = async () => {
     .order('name');
 };
 
+export const importProductsBulk = async (items) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('No hay filas para importar');
+  }
+
+  const { data, error } = await getPharmacySchema().rpc('import_products_bulk', {
+    p_items: items,
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Error al importar productos');
+  }
+
+  return data;
+};
+
 // --- GESTIÓN DE PRECIOS POR SUCURSAL ---
 
 export const fetchPricesByWarehouse = async (warehouseId) => {
@@ -337,6 +353,22 @@ export const fetchInventoryStock = async (warehouseId = null) => {
     .from('inventory_batches')
     .select('*, product:product_id(*), location:location_id(*)')
     .eq('company_id', companyId);
+};
+
+export const fetchInventoryAlerts = async (warehouseId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let query = getPharmacySchema()
+    .from('view_inventory_alerts')
+    .select('*')
+    .eq('company_id', companyId);
+
+  if (warehouseId) {
+    query = query.eq('warehouse_id', warehouseId);
+  }
+
+  return await query.order('severity', { ascending: true }).order('expiry_date', { ascending: true, nullsFirst: false });
 };
 
 // Obtener catálogo de pacientes
@@ -604,6 +636,24 @@ export const fetchPosProducts = async (warehouseId, search = '', limit = 100) =>
   }));
 };
 
+export const fetchBioequivalentSuggestions = async (productId, warehouseId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return [];
+
+  const { data, error } = await getPharmacySchema()
+    .rpc('get_bioequivalent_suggestions', {
+      p_product_id: productId,
+      p_warehouse_id: warehouseId,
+    });
+
+  if (error) {
+    console.error('Error en fetchBioequivalentSuggestions:', error);
+    return [];
+  }
+
+  return data || [];
+};
+
 // --- OPERACIONES DE VENTA (POS) — RPC TRANSACCIONAL ---
 export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) => {
   const companyId = await getMyCompanyId();
@@ -667,10 +717,11 @@ export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) =>
     throw new Error(msg);
   }
 
+  // process_pharmacy_sale returns: { sale_id, session_id, company_id, dte_id, success }
+  // Read all fields directly — do NOT destructure through a nested .sale property.
   const saleResult = Array.isArray(data) ? data[0] : data;
-  const saleRecord = saleResult?.sale || saleResult || {};
-  const saleId = saleRecord.id || saleResult?.sale_id || null;
-  let sessionId = saleRecord.session_id || saleHeader.session_id || null;
+  const saleId = saleResult?.sale_id || null;
+  let sessionId = saleResult?.session_id || saleHeader.session_id || null;
   let operatorId = saleHeader.operator_id || null;
 
   if ((!sessionId || !operatorId) && warehouseId) {
@@ -740,7 +791,24 @@ export const createSaleWithItems = async (saleHeader, cartItems, warehouseId) =>
     }
   }
 
-  return data;
+  // DTE is generated inside process_pharmacy_sale (backend authority).
+  // Frontend does NOT generate DTEs. If dte_id is absent, surface a warning only.
+  const dteId = saleResult?.dte_id || null;
+  const dteWarning = !dteId
+    ? 'Venta registrada, pero boleta interna pendiente. Contacte al administrador si persiste.'
+    : null;
+
+  // Return structured result for the POS to consume
+  return {
+    sale_id: saleId,
+    dte_id: dteId,
+    dte_warning: dteWarning,
+    session_id: sessionId,
+    total_amount: Number(saleHeader.total_amount || 0),
+    payment_method: saleHeader.payment_method || 'CASH',
+    document_number: saleHeader.document_number || null,
+    raw: data,
+  };
 };
 
 export const findPendingPrescription = async (folio) => {
@@ -1648,6 +1716,7 @@ export const createTransferRequest = async (transferData, cartItems) => {
     batch_id: item.batch?.id,
   }));
   const transferQuantityTotal = transferItemsMetadata.reduce((sum, item) => sum + Number(item.cantidad || 0), 0);
+  const getBatchAvailableQty = (batch) => Math.max(0, Number(batch.current_quantity || 0));
 
   if (isInternal) {
     // CASO A: Acomodo Inmediato (Putaway Directo)
@@ -1655,9 +1724,15 @@ export const createTransferRequest = async (transferData, cartItems) => {
       const { batch, transferQuantity, dest_location_id } = item;
       const finalDest = dest_location_id || transferData.dest_location_id;
       const srcLocationId = transferData.source_location_id || batch.location_id;
+      const sourceAvailableQty = getBatchAvailableQty(batch);
+
+      if (transferQuantity > sourceAvailableQty) {
+        throw new Error(`La cantidad a mover excede el stock activo del lote ${batch.batch_number}. Disponible: ${sourceAvailableQty}`);
+      }
 
       // 1. Restar del origen
-      const newSrcQty = Math.max(0, (batch.current_quantity || 0) - transferQuantity);
+      const newSrcQty = Math.max(0, Number(batch.current_quantity || 0) - transferQuantity);
+      const newSrcAvailableQty = Math.max(0, sourceAvailableQty - transferQuantity);
       const { error: subErr } = await schema
         .from('inventory_batches')
         .update({ current_quantity: newSrcQty })
@@ -1719,7 +1794,7 @@ export const createTransferRequest = async (transferData, cartItems) => {
           to_location_id: null,
           movement_type: 'INTERNAL_TRANSFER',
           quantity: -Math.abs(transferQuantity),
-          balance_after: newSrcQty,
+          balance_after: newSrcAvailableQty,
           notes: `Acomodo interno (salida): ${transferData.notes || ''}`
         }]);
 
@@ -1799,9 +1874,14 @@ export const createTransferRequest = async (transferData, cartItems) => {
     // 3. Descontar stock origen y registrar salida en Kardex
     for (const item of cartItems) {
       const { batch, transferQuantity } = item;
+      const sourceAvailableQty = getBatchAvailableQty(batch);
+
+      if (transferQuantity > sourceAvailableQty) {
+        throw new Error(`La cantidad a transferir excede el stock activo del lote ${batch.batch_number}. Disponible: ${sourceAvailableQty}`);
+      }
 
       // 3a. Restar del lote de origen
-      const newQty = (batch.current_quantity || 0) - transferQuantity;
+      const newQty = Number(batch.current_quantity || 0) - transferQuantity;
       const { error: subErr } = await schema
         .from('inventory_batches')
         .update({ current_quantity: newQty })
@@ -1810,7 +1890,7 @@ export const createTransferRequest = async (transferData, cartItems) => {
       if (subErr) throw new Error(`Error descontando stock origen (${batch.batch_number}): ${subErr.message}`);
 
       // 3b. Calcular saldo restante ANTES de insertar para incluirlo en el payload
-      const balanceAfter = Math.max(0, newQty);
+      const balanceAfter = Math.max(0, sourceAvailableQty - transferQuantity);
 
       // 3c. Registrar OUTBOUND_TRANSFER — quantity NEGATIVO (requerido por v_kardex_professional)
       const { error: movErr } = await schema
@@ -2098,4 +2178,239 @@ export const deleteWarehouse = async (id) => {
     .eq('id', id)
     .eq('company_id', companyId);
   if (error) throw error;
+};
+
+// --- DTE INTERNO ---
+export const fetchDteDocuments = async (filters = {}) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let query = getPharmacySchema()
+    .from('dte_documents')
+    .select(`*, sale:sale_id(document_number), patient:customer_id(full_name, rut)`)
+    .eq('company_id', companyId);
+
+  if (filters.dte_type) query = query.eq('dte_type', filters.dte_type);
+  if (filters.folio) query = query.eq('folio', Number(filters.folio));
+  if (filters.status) query = query.eq('status', filters.status);
+
+  return await query.order('created_at', { ascending: false });
+};
+
+export const fetchDteById = async (dteId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('dte_documents')
+    .select(`*, sale:sale_id(document_number), patient:customer_id(full_name, rut)`)
+    .eq('company_id', companyId)
+    .eq('id', dteId)
+    .maybeSingle();
+};
+
+export const fetchSaleItems = async (saleId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  return await getPharmacySchema()
+    .from('sale_items')
+    .select('*, product:product_id(name, dci, barcode)')
+    .eq('company_id', companyId)
+    .eq('sale_id', saleId);
+};
+
+// --- ISP AUDIT VIEWS ---
+export const fetchBatchAudit = async (filters = {}) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  // Si filters es string, lo tratamos como batch_number por compatibilidad
+  const params = typeof filters === 'string' ? { batch_number: filters } : filters;
+
+  let query = getPharmacySchema()
+    .from('view_batch_audit')
+    .select('*')
+    .eq('company_id', companyId);
+
+  if (params.batch_id) query = query.eq('batch_id', params.batch_id);
+  else if (params.batch_number) query = query.eq('batch_number', params.batch_number);
+  
+  if (params.from) query = query.gte('created_at', params.from);
+  if (params.to) query = query.lte('created_at', params.to);
+  if (params.product_id) query = query.eq('product_id', params.product_id);
+
+  return await query.order('created_at', { ascending: false }).limit(500);
+};
+
+/**
+ * Obtiene la lista de lotes únicos (por producto/lote) que coinciden con un número de lote
+ */
+export const fetchUniqueLotsByNumber = async (batchNumber) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  const { data, error } = await getPharmacySchema()
+    .from('view_batch_registry')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('batch_number', batchNumber)
+    .order('received_date', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false });
+
+  if (error) return { data: [], error };
+
+  return {
+    data: (data || []).map(lot => ({
+      ...lot,
+      product: { name: lot.product_name, dci: lot.product_dci },
+      location: {
+        name: lot.location_name,
+        location_type: lot.location_type,
+        warehouse: { name: lot.warehouse_name }
+      },
+      po: lot.po_id ? {
+        id: lot.po_id,
+        po_number: lot.po_number,
+        issue_date: lot.purchase_order_date,
+        supplier: { name: lot.supplier_name }
+      } : null,
+      receipt: lot.receipt_id ? {
+        id: lot.receipt_id,
+        document_type: lot.receipt_document_type,
+        document_number: lot.receipt_document_number,
+        received_date: lot.received_date
+      } : null
+    })),
+    error: null
+  };
+};
+
+
+export const fetchPrescriptionAudit = async (filters = {}) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let query = getPharmacySchema()
+    .from('view_prescription_audit')
+    .select('*')
+    .eq('company_id', companyId);
+
+  if (filters.patient_rut) query = query.ilike('patient_rut', `%${filters.patient_rut}%`);
+  if (filters.folio_electronico) query = query.ilike('folio_electronico', `%${filters.folio_electronico}%`);
+  if (filters.from) query = query.gte('sale_date', filters.from);
+  if (filters.to) query = query.lte('sale_date', filters.to);
+
+  return await query.order('sale_date', { ascending: false }).limit(200);
+};
+
+export const fetchControlledAudit = async (filters = {}) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let query = getPharmacySchema()
+    .from('view_controlled_audit')
+    .select('*')
+    .eq('company_id', companyId);
+
+  if (filters.from) query = query.gte('created_at', filters.from);
+  if (filters.to) query = query.lte('created_at', filters.to);
+  if (filters.patient_rut) query = query.ilike('patient_rut', `%${filters.patient_rut}%`);
+  if (filters.product_id) query = query.eq('product_id', filters.product_id);
+
+  return await query.order('created_at', { ascending: false }).limit(200);
+};
+
+/**
+ * Procesa una devolución de venta (arquitectura interna)
+ * @param {string} saleId - ID de la venta original
+ * @param {string} reason - Motivo de la devolución
+ * @param {Array} items - Lista de items [{sale_item_id, quantity}]
+ */
+export const processSaleReturn = async (saleId, reason, items) => {
+  if (!saleId || !items || items.length === 0) {
+    throw new Error('Datos de devolución incompletos');
+  }
+
+  const { data, error } = await getPharmacySchema().rpc('process_sale_return', {
+    p_sale_id: saleId,
+    p_reason: reason,
+    p_items: items
+  });
+
+  if (error) {
+    console.error('Error en processSaleReturn:', error);
+    throw new Error(error.message || 'Error al procesar la devolución');
+  }
+
+  return data;
+};
+
+/**
+ * Busca ventas con filtros
+ * @param {Object} filters { document_number, patient_rut, patient_name }
+ */
+export const fetchSales = async (filters = {}) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  let query = getPharmacySchema()
+    .from('sales')
+    .select(`*, patient:patient_id(full_name, rut)`)
+    .eq('company_id', companyId);
+
+  if (filters.document_number) query = query.ilike('document_number', `%${filters.document_number}%`);
+  if (filters.patient_rut) query = query.ilike('patient(rut)', `%${filters.patient_rut}%`);
+  
+  return await query.order('created_at', { ascending: false }).limit(50);
+};
+
+/**
+ * Obtiene una venta específica por su número de documento o ID
+ */
+export const fetchSaleByNumber = async (docNumberOrId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: null, error: new Error("No company id") };
+
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(docNumberOrId);
+
+  let query = getPharmacySchema()
+    .from('sales')
+    .select(`*, patient:patient_id(full_name, rut)`)
+    .eq('company_id', companyId);
+
+  if (isUuid) {
+    query = query.eq('id', docNumberOrId);
+  } else {
+    query = query.eq('document_number', docNumberOrId);
+  }
+
+  return await query.maybeSingle();
+};
+
+/**
+ * Obtiene el historial de devoluciones de una venta
+ */
+export const fetchReturnHistoryForSale = async (saleId) => {
+  const companyId = await getMyCompanyId();
+  if (!companyId) return { data: [], error: new Error("No company id") };
+
+  // 1. Obtener los IDs de las devoluciones asociadas a la venta
+  const { data: returns, error: retErr } = await getPharmacySchema()
+    .from('sales_returns')
+    .select('id')
+    .eq('sale_id', saleId)
+    .eq('company_id', companyId);
+
+  if (retErr) throw retErr;
+  if (!returns || returns.length === 0) return { data: [] };
+
+  const returnIds = returns.map(r => r.id);
+
+  // 2. Obtener los items devueltos en esas devoluciones
+  return await getPharmacySchema()
+    .from('sales_return_items')
+    .select('sale_item_id, quantity')
+    .in('return_id', returnIds)
+    .eq('company_id', companyId);
 };

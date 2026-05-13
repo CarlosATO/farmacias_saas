@@ -1,9 +1,31 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Eye, FileText, Filter, RefreshCcw, Search, User, X } from 'lucide-react';
-import { fetchAuditLogDetail, fetchAuditLogs } from '../api/pharmacyClient';
+import { 
+  Calendar, 
+  ChevronLeft, 
+  ChevronRight, 
+  Eye, 
+  FileText, 
+  Filter, 
+  RefreshCcw, 
+  Search, 
+  User, 
+  X, 
+  Download, 
+  ShieldCheck, 
+  Box, 
+  ClipboardList,
+  Printer
+} from 'lucide-react';
+import { 
+  fetchAuditLogDetail, 
+  fetchAuditLogs,
+  fetchBatchAudit,
+  fetchPrescriptionAudit,
+  fetchControlledAudit,
+  fetchUniqueLotsByNumber
+} from '../api/pharmacyClient';
 
 const PAGE_SIZE = 50;
-const initialFilters = { startDate: '', endDate: '', eventType: '', userId: '' };
 
 const formatDate = (value) => {
   if (!value) return '-';
@@ -13,18 +35,8 @@ const formatDate = (value) => {
   }).format(new Date(value));
 };
 
-const getEventClass = (eventType = '') => {
-  if (eventType.includes('SALE')) return 'bg-emerald-50 text-emerald-700 border-emerald-100';
-  if (eventType.includes('PRESCRIPTION')) return 'bg-purple-50 text-purple-700 border-purple-100';
-  if (eventType.includes('CASH') || eventType.includes('SESSION')) return 'bg-blue-50 text-blue-700 border-blue-100';
-  if (eventType.includes('TRANSFER') || eventType.includes('INVENTORY')) return 'bg-orange-50 text-orange-700 border-orange-100';
-  return 'bg-gray-50 text-gray-700 border-gray-200';
-};
-
-const isMissing = (value) => value === null || value === undefined || value === '';
-
 const formatCLP = (value) => {
-  if (isMissing(value)) return 'Sin dato';
+  if (value === null || value === undefined || value === '') return 'Sin dato';
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return String(value);
 
@@ -35,480 +47,586 @@ const formatCLP = (value) => {
   }).format(numericValue);
 };
 
-const formatMetadataValue = (value) => {
-  if (isMissing(value)) return 'Sin dato';
-  if (typeof value === 'boolean') return value ? 'Si' : 'No';
-  if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
+const formatDateOnly = (value) => {
+  if (!value) return 'S/D';
+  return new Intl.DateTimeFormat('es-CL', { dateStyle: 'short' }).format(new Date(value));
 };
 
-const SUMMARY_KEYS = ['sale_id', 'prescription_id', 'warehouse_id', 'session_id', 'operator_id', 'payment_method', 'amount'];
+const formatQuantity = (value) => {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue)) return '0';
 
-const getItemValue = (item, keys) => {
-  const match = keys.find(key => !isMissing(item?.[key]));
-  return match ? item[match] : null;
+  return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 2 }).format(numericValue);
 };
 
-const makeDisplay = (primary) => ({
-  primary: isMissing(primary) ? 'No disponible' : formatMetadataValue(primary),
-});
-
-const getPrescriptionDisplay = (prescription) => {
-  if (!prescription) return makeDisplay(null);
-
-  const folio = prescription.folio_electronico || prescription.folio || 'No disponible';
-  const patientName = prescription.patient?.full_name;
-  const patientLabel = patientName ? ` - ${patientName}` : '';
-
-  return {
-    primary: `${folio}${patientLabel}`,
-  };
+const getOriginLabel = (item) => {
+  if (item?.receipt_document_number) {
+    return `${item.receipt_document_type || 'Doc'} ${item.receipt_document_number}`;
+  }
+  if (item?.po_number) return `OC ${item.po_number}`;
+  if (item?.source_type === 'DEVOLUCION_LEGADO') return 'Devolución legado';
+  return 'Sin recepción';
 };
 
-const getSessionDisplay = (session) => {
-  if (!session) return makeDisplay(null);
-  
-  const opName = session.operator?.full_name || 'Operador desconocido';
-  const openDate = session.start_time ? new Date(session.start_time).toLocaleDateString() : '';
-  const closeDate = session.end_time ? ` - ${new Date(session.end_time).toLocaleDateString()}` : '';
-  
-  return {
-    primary: `${opName} (${openDate}${closeDate})`,
-  };
-};
+const getSupplierName = (item) => item?.supplier_name || item?.po?.supplier?.name || 'S/D';
+
+const getStateClass = (state) => (
+  state === 'CUARENTENA'
+    ? 'bg-amber-100 text-amber-700 border-amber-200'
+    : 'bg-emerald-100 text-emerald-700 border-emerald-200'
+);
 
 export default function Auditoria() {
+  const [activeTab, setActiveTab] = useState('GENERAL'); // GENERAL, LOTES, RECETAS, CONTROLADOS
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Tab General
   const [logs, setLogs] = useState([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
+  const [filters, setFilters] = useState({ startDate: '', endDate: '', eventType: '', userId: '' });
+  const [appliedFilters, setAppliedFilters] = useState({ startDate: '', endDate: '', eventType: '', userId: '' });
+  
+  // Tab Lotes
+  const [batchData, setBatchData] = useState([]);
+  const [batchSearch, setBatchSearch] = useState('');
+  const [uniqueLots, setUniqueLots] = useState([]); // List of possible lots for a batch number
+  const [selectedBatchId, setSelectedBatchId] = useState(null);
+
+  // Tab Recetas
+  const [prescriptionData, setPrescriptionData] = useState([]);
+  const [prescriptionFilters, setPrescriptionFilters] = useState({ folio: '', patient_rut: '', startDate: '', endDate: '' });
+
+  // Tab Controlados
+  const [controlledData, setControlledData] = useState([]);
+  const [controlledFilters, setControlledFilters] = useState({ startDate: '', endDate: '' });
+
+  // Detalle Modal
   const [selectedLog, setSelectedLog] = useState(null);
   const [auditDetail, setAuditDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [showTechnicalJson, setShowTechnicalJson] = useState(false);
 
-  const totalPages = useMemo(() => Math.max(1, Math.ceil((count || 0) / PAGE_SIZE)), [count]);
-
-  const loadLogs = useCallback(async () => {
+  const loadGeneralLogs = async () => {
     setLoading(true);
-    setError(null);
     try {
-      const { data, error: fetchError, count: totalCount } = await fetchAuditLogs({
+      const { data, count: totalCount } = await fetchAuditLogs({
         ...appliedFilters,
         page,
         limit: PAGE_SIZE,
       });
-
-      if (fetchError) throw fetchError;
       setLogs(data || []);
       setCount(totalCount || 0);
     } catch (err) {
-      setLogs([]);
-      setCount(0);
-      setError(err.message || 'No se pudo cargar la bitacora.');
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [appliedFilters, page]);
+  };
 
-  useEffect(() => {
-    loadLogs();
-  }, [loadLogs]);
+  const loadBatchAudit = async (batchId = null) => {
+    if (!batchSearch && !batchId) return;
+    setLoading(true);
+    setUniqueLots([]);
+    setError(null);
 
-  useEffect(() => {
-    let isActive = true;
-
-    if (!selectedLog) {
-      setAuditDetail(null);
-      setDetailLoading(false);
-      return undefined;
-    }
-
-    const loadDetail = async () => {
-      setDetailLoading(true);
-      try {
-        const { data } = await fetchAuditLogDetail(selectedLog.metadata || {});
-        if (isActive) setAuditDetail(data || null);
-      } catch (err) {
-        if (isActive) setAuditDetail(null);
-      } finally {
-        if (isActive) setDetailLoading(false);
+    try {
+      if (batchId) {
+        // Rastrear un ID específico
+        const { data } = await fetchBatchAudit({ batch_id: batchId });
+        setBatchData(data || []);
+        setSelectedBatchId(batchId);
+      } else {
+        // Buscar por número de lote primero para ver si hay duplicidad
+        const { data: lots } = await fetchUniqueLotsByNumber(batchSearch.trim());
+        
+        if (!lots || lots.length === 0) {
+          setBatchData([]);
+          setError('No se encontraron lotes con ese número.');
+        } else if (lots.length === 1) {
+          // Solo hay uno, cargar directamente
+          const { data } = await fetchBatchAudit({ batch_id: lots[0].id });
+          setBatchData(data || []);
+          setSelectedBatchId(lots[0].id);
+        } else {
+          // Hay varios, mostrar selector
+          setUniqueLots(lots);
+          setBatchData([]);
+          setSelectedBatchId(null);
+        }
       }
-    };
-
-    loadDetail();
-
-    return () => {
-      isActive = false;
-    };
-  }, [selectedLog]);
-
-  const handleFilterChange = (e) => {
-    const { name, value } = e.target;
-    setFilters(prev => ({ ...prev, [name]: value }));
+    } catch (err) {
+      setError('Error al cargar auditoría de lote: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const applyFilters = () => {
-    setPage(1);
-    setAppliedFilters(filters);
+  const loadPrescriptionAudit = async () => {
+    setLoading(true);
+    try {
+      const { data } = await fetchPrescriptionAudit(prescriptionFilters);
+      setPrescriptionData(data || []);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const clearFilters = () => {
-    setFilters(initialFilters);
-    setAppliedFilters(initialFilters);
-    setPage(1);
+  const loadControlledAudit = async () => {
+    setLoading(true);
+    try {
+      const { data } = await fetchControlledAudit(controlledFilters);
+      setControlledData(data || []);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const metadataJson = selectedLog
-    ? JSON.stringify(selectedLog.metadata || {}, null, 2)
-    : '{}';
-  const selectedMetadata = selectedLog?.metadata || {};
-  const saleDisplay = auditDetail?.sale
-    ? makeDisplay(auditDetail.sale.document_number || 'Venta POS')
-    : makeDisplay(selectedMetadata.sale_id ? 'Venta POS' : null);
-  const prescriptionDisplay = getPrescriptionDisplay(auditDetail?.prescription);
-  const warehouseDisplay = auditDetail?.warehouse
-    ? makeDisplay(auditDetail.warehouse.name)
-    : makeDisplay(null);
-  const operatorDisplay = auditDetail?.operator
-    ? makeDisplay(auditDetail.operator.full_name)
-    : makeDisplay(null);
-  const sessionDisplay = getSessionDisplay(auditDetail?.session);
+  useEffect(() => {
+    if (activeTab === 'GENERAL') loadGeneralLogs();
+    if (activeTab === 'RECETAS') loadPrescriptionAudit();
+    if (activeTab === 'CONTROLADOS') loadControlledAudit();
+  }, [activeTab, appliedFilters, page]);
 
-  const summaryRows = [
-    { label: 'Venta', ...saleDisplay },
-    { label: 'Receta', ...prescriptionDisplay },
-    { label: 'Sucursal', ...warehouseDisplay },
-    { label: 'Sesion Caja', ...sessionDisplay },
-    { label: 'Operador', ...operatorDisplay },
-    { label: 'Medio de pago', ...makeDisplay(selectedMetadata.payment_method) },
-    { label: 'Total', primary: formatCLP(selectedMetadata.amount) },
-  ];
-  const items = Array.isArray(selectedMetadata.items) ? selectedMetadata.items : [];
-  const knownKeys = new Set([...SUMMARY_KEYS, 'items']);
-  const otherRows = Object.entries(selectedMetadata)
-    .filter(([key, value]) => !knownKeys.has(key) && !Array.isArray(value) && (value === null || typeof value !== 'object'))
-    .map(([key, value]) => ({ label: key, value: formatMetadataValue(value) }));
+  const exportToCSV = (data, filename) => {
+    if (!data.length) return;
+    const headers = Object.keys(data[0]);
+    const csvContent = [
+      headers.join(','),
+      ...data.map(row => headers.map(header => `"${String(row[header] || '').replace(/"/g, '""')}"`).join(','))
+    ].join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-140px)] bg-white font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm">
-      <div className="border-b border-gray-200 px-4 py-3 bg-white flex flex-col gap-3 shrink-0">
-        <div className="flex items-center text-[11px] text-gray-500 uppercase tracking-widest font-bold">
-          <span>Farmacia</span>
-          <ChevronRight size={12} className="mx-1" />
-          <span className="text-gray-900">Bitacora de Auditoria</span>
+    <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden border border-gray-200 rounded-sm shadow-sm print:h-auto print:overflow-visible print:border-none print:shadow-none">
+      
+      {/* Header & Tabs */}
+      <div className="border-b border-gray-200 px-6 py-4 bg-white flex flex-col gap-4 shrink-0 print:hidden">
+        <div className="flex justify-between items-center">
+            <div>
+                <div className="flex items-center text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">
+                    <span>Farmacia</span>
+                    <ChevronRight size={12} className="mx-1" />
+                    <span className="text-gray-900">Auditoria ISP</span>
+                </div>
+                <h1 className="text-2xl font-black text-gray-800 uppercase tracking-tight flex items-center gap-3">
+                    <ShieldCheck size={28} className="text-[#4C3073]" />
+                    Bitácora Farmacéutica Fiscalizable
+                </h1>
+            </div>
+            <div className="flex gap-2">
+                <button onClick={handlePrint} className="flex items-center gap-2 border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-sm text-xs font-bold uppercase tracking-wider">
+                    <Printer size={16} /> Imprimir
+                </button>
+            </div>
         </div>
 
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-black text-gray-800 uppercase tracking-tight flex items-center gap-2">
-              <FileText size={22} className="text-[#4C3073]" />
-              Auditoria Legal
-            </h1>
-            <p className="text-xs text-gray-500 font-bold mt-1">Registros solo lectura desde pharmacy.audit_logs.</p>
-          </div>
-
-          <button
-            type="button"
-            onClick={loadLogs}
-            disabled={loading}
-            className="inline-flex items-center gap-2 border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-sm text-xs font-bold uppercase tracking-wider disabled:opacity-50"
-          >
-            <RefreshCcw size={14} /> Actualizar
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2 bg-gray-50 border border-gray-200 rounded-sm p-3">
-          <div>
-            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Desde</label>
-            <div className="relative">
-              <Calendar size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="date"
-                name="startDate"
-                value={filters.startDate}
-                onChange={handleFilterChange}
-                className="w-full rounded-sm border border-gray-300 pl-8 pr-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Hasta</label>
-            <div className="relative">
-              <Calendar size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="date"
-                name="endDate"
-                value={filters.endDate}
-                onChange={handleFilterChange}
-                className="w-full rounded-sm border border-gray-300 pl-8 pr-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Evento</label>
-            <div className="relative">
-              <Filter size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                name="eventType"
-                value={filters.eventType}
-                onChange={handleFilterChange}
-                placeholder="SALE, CASH, PRESCRIPTION..."
-                className="w-full rounded-sm border border-gray-300 pl-8 pr-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Usuario</label>
-            <div className="relative">
-              <User size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                name="userId"
-                value={filters.userId}
-                onChange={handleFilterChange}
-                placeholder="user_id"
-                className="w-full rounded-sm border border-gray-300 pl-8 pr-3 py-2 text-xs font-mono outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-end gap-2">
-            <button
-              type="button"
-              onClick={applyFilters}
-              className="flex-1 inline-flex items-center justify-center gap-2 bg-[#4C3073] hover:bg-[#3d265c] text-white px-4 py-2 rounded-sm text-xs font-black uppercase tracking-wider"
-            >
-              <Search size={14} /> Filtrar
-            </button>
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="inline-flex items-center justify-center border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-sm text-xs font-black uppercase"
-              title="Limpiar filtros"
-            >
-              <X size={14} />
-            </button>
-          </div>
+        <div className="flex border-b border-gray-200 -mb-4">
+            {[
+                { id: 'GENERAL', label: 'Eventos Generales', icon: <FileText size={16}/> },
+                { id: 'LOTES', label: 'Trazabilidad Lotes', icon: <Box size={16}/> },
+                { id: 'RECETAS', label: 'Despacho Recetas', icon: <ClipboardList size={16}/> },
+                { id: 'CONTROLADOS', label: 'Medicamentos Controlados', icon: <ShieldCheck size={16}/> }
+            ].map(tab => (
+                <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex items-center gap-2 px-6 py-4 text-xs font-bold uppercase tracking-widest transition-all border-b-2 ${activeTab === tab.id ? 'border-[#4C3073] text-[#4C3073] bg-purple-50/30' : 'border-transparent text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
+                >
+                    {tab.icon} {tab.label}
+                </button>
+            ))}
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-gray-50/30">
-        {error && (
-          <div className="m-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-sm text-xs font-bold uppercase tracking-widest">
-            {error}
-          </div>
+      {/* Filters Area */}
+      <div className="px-6 py-4 bg-white border-b border-gray-200 print:hidden">
+        {activeTab === 'GENERAL' && (
+            <div className="flex flex-wrap items-end gap-3">
+                <div className="flex-1 min-w-[150px]">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Desde</label>
+                    <input type="date" value={filters.startDate} onChange={e => setFilters({...filters, startDate: e.target.value})} className="w-full rounded-sm border border-gray-300 px-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073]" />
+                </div>
+                <div className="flex-1 min-w-[150px]">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Hasta</label>
+                    <input type="date" value={filters.endDate} onChange={e => setFilters({...filters, endDate: e.target.value})} className="w-full rounded-sm border border-gray-300 px-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073]" />
+                </div>
+                <div className="flex-1 min-w-[150px]">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Evento</label>
+                    <input type="text" value={filters.eventType} onChange={e => setFilters({...filters, eventType: e.target.value})} placeholder="SALE, PRESCRIPTION..." className="w-full rounded-sm border border-gray-300 px-3 py-2 text-xs font-bold uppercase outline-none focus:border-[#4C3073]" />
+                </div>
+                <button onClick={() => setAppliedFilters(filters)} className="bg-[#4C3073] text-white px-6 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <Search size={16} /> Buscar
+                </button>
+                <button onClick={() => exportToCSV(logs, 'auditoria_general')} className="border border-emerald-600 text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <Download size={16} /> Excel
+                </button>
+            </div>
         )}
 
-        <table className="w-full text-left border-collapse">
-          <thead className="bg-[#f8f9fa] border-b border-gray-200 sticky top-0 z-10">
-            <tr>
-              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest w-44">Fecha</th>
-              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest w-72">Usuario</th>
-              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest w-56">Evento</th>
-              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest">Descripcion</th>
-              <th className="px-4 py-3 text-[10px] font-bold text-gray-500 uppercase tracking-widest text-right w-32">Detalle</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 bg-white">
-            {loading ? (
-              <tr>
-                <td colSpan="5" className="px-4 py-16 text-center text-gray-400 font-bold">Cargando bitacora...</td>
-              </tr>
-            ) : logs.length === 0 ? (
-              <tr>
-                <td colSpan="5" className="px-4 py-16 text-center text-gray-400 font-bold">No hay registros para los filtros seleccionados.</td>
-              </tr>
-            ) : logs.map(log => (
-              <tr key={log.id} className="hover:bg-gray-50 transition-colors">
-                <td className="px-4 py-3 text-xs font-bold text-gray-700 whitespace-nowrap">{formatDate(log.created_at)}</td>
-                <td className="px-4 py-3">
-                  <span className="font-bold text-[11px] text-gray-700 break-all">
-                    {log.user_name || log.user_email || log.user?.full_name || log.user?.email || 'Usuario del sistema'}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-1 rounded-sm text-[10px] font-black uppercase tracking-wider border ${getEventClass(log.event_type)}`}>
-                    {log.event_type}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-xs font-bold text-gray-700">{log.description || '-'}</td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedLog(log);
-                      setShowTechnicalJson(false);
-                    }}
-                    className="inline-flex items-center gap-1.5 text-[#4C3073] hover:text-[#3d265c] text-[11px] font-black uppercase tracking-wider"
-                  >
-                    <Eye size={14} /> Ver detalle
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="border-t border-gray-200 bg-white px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
-        <p className="text-xs font-bold text-gray-500">
-          Mostrando {logs.length} de {count || 0} registros. Pagina {page} de {totalPages}.
-        </p>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setPage(prev => Math.max(1, prev - 1))}
-            disabled={page <= 1 || loading}
-            className="inline-flex items-center gap-2 border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-sm text-xs font-black uppercase tracking-wider disabled:opacity-40"
-          >
-            <ChevronLeft size={14} /> Anterior
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage(prev => Math.min(totalPages, prev + 1))}
-            disabled={page >= totalPages || loading}
-            className="inline-flex items-center gap-2 border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-sm text-xs font-black uppercase tracking-wider disabled:opacity-40"
-          >
-            Siguiente <ChevronRight size={14} />
-          </button>
-        </div>
-      </div>
-
-      {selectedLog && (
-        <div className="fixed inset-0 z-[200] bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-sm border border-gray-200 shadow-sm w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
-            <div className="border-b border-gray-200 px-5 py-4 flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Detalle de Auditoria</p>
-                <h2 className="text-lg font-black text-gray-800 uppercase tracking-tight">{selectedLog.event_type}</h2>
-                <p className="text-xs font-bold text-gray-500 mt-1">{formatDate(selectedLog.created_at)} | {selectedLog.user_name || selectedLog.user_email || selectedLog.user?.full_name || selectedLog.user?.email || 'Usuario del sistema'}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedLog(null);
-                  setShowTechnicalJson(false);
-                }}
-                className="p-2 rounded-sm border border-gray-200 hover:bg-gray-50 text-gray-500"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="p-5 overflow-auto space-y-4">
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Descripcion</label>
-                <p className="text-sm font-bold text-gray-800 bg-gray-50 border border-gray-200 rounded-sm p-3">{selectedLog.description || '-'}</p>
-              </div>
-
-              <div className="bg-white border border-gray-200 rounded-sm overflow-hidden">
-                <div className="bg-gray-50 border-b border-gray-200 px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Resumen de metadata</h3>
-                    {detailLoading && <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Resolviendo nombres...</span>}
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-gray-200">
-                  {summaryRows.map(row => (
-                    <div key={row.label} className="bg-white p-3">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{row.label}</p>
-                      <p className="text-xs font-bold text-gray-800 break-all">
-                        {detailLoading ? <span className="text-gray-400">Cargando...</span> : row.primary}
-                      </p>
+        {activeTab === 'LOTES' && (
+            <div className="flex flex-col gap-4">
+                <div className="flex items-end gap-3">
+                    <div className="flex-1">
+                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Número de Lote</label>
+                        <input 
+                            type="text" 
+                            value={batchSearch} 
+                            onChange={e => setBatchSearch(e.target.value)} 
+                            onKeyDown={e => e.key === 'Enter' && loadBatchAudit()}
+                            placeholder="Ej: LT-123456" 
+                            className="w-full rounded-sm border border-gray-300 px-4 py-2 text-sm font-black uppercase outline-none focus:border-[#4C3073]" 
+                        />
                     </div>
-                  ))}
+                    <button onClick={() => loadBatchAudit()} className="bg-[#4C3073] text-white px-6 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                        <Search size={16} /> Rastrear Lote
+                    </button>
+                    <button onClick={() => exportToCSV(batchData, `auditoria_lote_${batchSearch}`)} className="border border-emerald-600 text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                        <Download size={16} /> Excel
+                    </button>
                 </div>
-              </div>
 
-              <div className="bg-white border border-gray-200 rounded-sm overflow-hidden">
-                <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
-                  <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Productos</h3>
-                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{items.length} item(s)</span>
-                </div>
-                {items.length > 0 ? (
-                  <div className="overflow-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead className="bg-white border-b border-gray-200">
-                        <tr>
-                          <th className="px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">Producto</th>
-                          <th className="px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Cantidad</th>
-                          <th className="px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Precio</th>
-                          <th className="px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">Receta asociada</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {items.map((item, index) => {
-                          const price = getItemValue(item, ['amount', 'unit_price', 'price', 'unit_cost']);
-                          const product = auditDetail?.productsById?.[item.product_id];
-                          const itemPrescriptionId = item.prescription_id || selectedMetadata.prescription_id;
-                          const itemPrescription = auditDetail?.prescriptionsById?.[itemPrescriptionId];
-                          const itemPrescriptionDisplay = getPrescriptionDisplay(itemPrescription, itemPrescriptionId);
-                          return (
-                            <tr key={`${item.product_id || 'item'}-${index}`}>
-                              <td className="px-4 py-3">
-                                <p className="text-xs font-bold text-gray-800 break-all">
-                                  {detailLoading ? <span className="text-gray-400">Cargando...</span> : formatMetadataValue(item.product_name || 'Producto no encontrado')}
-                                </p>
-                              </td>
-                              <td className="px-4 py-3 text-xs font-bold text-gray-800 text-right">{formatMetadataValue(getItemValue(item, ['cantidad', 'quantity']))}</td>
-                              <td className="px-4 py-3 text-xs font-bold text-gray-800 text-right">{formatCLP(price)}</td>
-                              <td className="px-4 py-3">
-                                <p className="text-xs font-bold text-gray-800 break-all">
-                                  {detailLoading ? <span className="text-gray-400">Cargando...</span> : itemPrescriptionDisplay.primary}
-                                </p>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="px-4 py-6 text-center text-xs font-bold text-gray-400">Sin dato</p>
+                {uniqueLots.length > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 p-6 rounded-sm animate-in fade-in slide-in-from-top-2">
+                        <div className="flex items-start gap-4 mb-6">
+                            <div className="bg-amber-100 p-3 rounded-lg text-amber-700">
+                                <Box size={24} />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-black text-amber-900 uppercase tracking-tight">Múltiples registros encontrados</h3>
+                                <p className="text-xs text-amber-700 font-bold mt-1">El número de lote "{batchSearch}" está asociado a varias recepciones, ubicaciones o estados. Seleccione el registro específico para auditar:</p>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {uniqueLots.map(lot => (
+                                <button 
+                                    key={lot.id} 
+                                    onClick={() => loadBatchAudit(lot.id)}
+                                    className="text-left p-4 border border-amber-200 bg-white hover:border-amber-500 hover:shadow-md transition-all rounded-sm group relative overflow-hidden"
+                                >
+                                    <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-100 transition-opacity">
+                                        <Eye size={16} className="text-amber-500" />
+                                    </div>
+                                    
+                                    <div className="flex items-start justify-between gap-2 mb-3">
+                                        <div className="min-w-0">
+                                            <p className="text-[11px] font-black text-[#4C3073] uppercase tracking-tight mb-0.5 truncate">{lot.product?.name}</p>
+                                            <p className="text-[9px] font-bold text-gray-400 font-mono uppercase truncate">{lot.product?.dci}</p>
+                                        </div>
+                                        <span className={`shrink-0 text-[8px] font-black px-1.5 py-0.5 rounded-sm border uppercase ${lot.source_type === 'RECEPCION_REAL' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                                            {lot.source_type === 'RECEPCION_REAL' ? 'Recepción real' : lot.source_type === 'DEVOLUCION_LEGADO' ? 'Dev. legado' : 'Sin recepción'}
+                                        </span>
+                                    </div>
+                                     
+                                     <div className="space-y-2">
+                                        <div className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded-sm">
+                                            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Recepción / OC</span>
+                                            <span className="text-[10px] font-black text-gray-700 truncate max-w-[140px]">{getOriginLabel(lot)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded-sm">
+                                            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Proveedor</span>
+                                            <span className="text-[10px] font-black text-gray-700 truncate max-w-[140px]">{getSupplierName(lot)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded-sm">
+                                            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Ingreso</span>
+                                            <span className="text-[10px] font-black text-gray-700">{formatDateOnly(lot.received_date || lot.purchase_order_date || lot.created_at)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded-sm">
+                                            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Vence</span>
+                                            <span className="text-[10px] font-black text-gray-700">{lot.expiry_date || 'S/V'}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded-sm">
+                                            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Ubicación</span>
+                                            <span className="text-[10px] font-black text-gray-700 truncate max-w-[140px]">{lot.location?.warehouse?.name} / {lot.location?.name}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded-sm">
+                                            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Estado</span>
+                                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-sm border uppercase ${getStateClass(lot.warehouse_state)}`}>{lot.warehouse_state || 'ACTIVO'}</span>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-2 pt-1">
+                                            <div>
+                                                <p className="text-[8px] font-black text-gray-400 uppercase">Stock</p>
+                                                <p className="text-xs font-black text-gray-900">{formatQuantity(lot.current_quantity)}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[8px] font-black text-emerald-600 uppercase">Activo</p>
+                                                <p className="text-xs font-black text-gray-900">{formatQuantity(lot.active_quantity)}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[8px] font-black text-amber-600 uppercase">Cuar.</p>
+                                                <p className="text-xs font-black text-gray-900">{formatQuantity(lot.quarantine_stock)}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between">
+                                        <span className="text-[8px] text-gray-300 font-mono">ID: {lot.id.split('-')[0]}...</span>
+                                        <span className="text-[8px] text-gray-300 font-mono">LOTE: {lot.batch_number}</span>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 )}
-              </div>
-
-              {otherRows.length > 0 && (
-                <div className="bg-white border border-gray-200 rounded-sm overflow-hidden">
-                  <div className="bg-gray-50 border-b border-gray-200 px-4 py-3">
-                    <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Otros datos</h3>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-gray-200">
-                    {otherRows.map(row => (
-                      <div key={row.label} className="bg-white p-3">
-                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{row.label}</p>
-                        <p className="text-xs font-bold text-gray-800 break-all">{row.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="border border-gray-200 rounded-sm overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setShowTechnicalJson(prev => !prev)}
-                  className="w-full bg-gray-50 hover:bg-gray-100 px-4 py-3 text-left text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center justify-between"
-                >
-                  <span>{showTechnicalJson ? 'Ocultar JSON tecnico' : 'Ver JSON tecnico'}</span>
-                  <ChevronRight size={14} className={`transition-transform ${showTechnicalJson ? 'rotate-90' : ''}`} />
-                </button>
-                {showTechnicalJson && (
-                  <pre className="bg-gray-950 text-gray-100 p-4 text-xs overflow-auto max-h-[35vh] font-mono leading-relaxed whitespace-pre-wrap">
-                    {metadataJson}
-                  </pre>
-                )}
-              </div>
             </div>
-          </div>
+        )}
+
+        {activeTab === 'RECETAS' && (
+            <div className="flex flex-wrap items-end gap-3">
+                <div className="flex-1 min-w-[150px]">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Folio Receta</label>
+                    <input type="text" value={prescriptionFilters.folio} onChange={e => setPrescriptionFilters({...prescriptionFilters, folio: e.target.value})} placeholder="REC-001" className="w-full rounded-sm border border-gray-300 px-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073]" />
+                </div>
+                <div className="flex-1 min-w-[150px]">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">RUT Paciente</label>
+                    <input type="text" value={prescriptionFilters.patient_rut} onChange={e => setPrescriptionFilters({...prescriptionFilters, patient_rut: e.target.value})} placeholder="12.345.678-9" className="w-full rounded-sm border border-gray-300 px-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073]" />
+                </div>
+                <button onClick={loadPrescriptionAudit} className="bg-[#4C3073] text-white px-6 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <Search size={16} /> Filtrar
+                </button>
+                <button onClick={() => exportToCSV(prescriptionData, 'auditoria_recetas')} className="border border-emerald-600 text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <Download size={16} /> Excel
+                </button>
+            </div>
+        )}
+
+        {activeTab === 'CONTROLADOS' && (
+            <div className="flex items-end gap-3">
+                <div className="flex-1">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Fecha Desde</label>
+                    <input type="date" value={controlledFilters.startDate} onChange={e => setControlledFilters({...controlledFilters, startDate: e.target.value})} className="w-full rounded-sm border border-gray-300 px-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073]" />
+                </div>
+                <div className="flex-1">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Fecha Hasta</label>
+                    <input type="date" value={controlledFilters.endDate} onChange={e => setControlledFilters({...controlledFilters, endDate: e.target.value})} className="w-full rounded-sm border border-gray-300 px-3 py-2 text-xs font-bold outline-none focus:border-[#4C3073]" />
+                </div>
+                <button onClick={loadControlledAudit} className="bg-[#4C3073] text-white px-6 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <Search size={16} /> Generar Informe
+                </button>
+                <button onClick={() => exportToCSV(controlledData, 'auditoria_controlados')} className="border border-emerald-600 text-emerald-700 hover:bg-emerald-50 px-4 py-2 rounded-sm text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <Download size={16} /> Excel
+                </button>
+            </div>
+        )}
+      </div>
+
+      {/* Table Area */}
+      <div className="flex-1 overflow-auto bg-white p-6">
+        {loading ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                <RefreshCcw size={48} className="animate-spin mb-4" />
+                <p className="font-black uppercase tracking-widest">Cargando registros...</p>
+            </div>
+        ) : (
+            <div className="border border-gray-200 rounded-sm">
+                <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                        {activeTab === 'GENERAL' && (
+                            <tr>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Fecha</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Usuario</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Evento</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Descripción</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-right">Acción</th>
+                            </tr>
+                        )}
+                        {activeTab === 'LOTES' && (
+                            <tr>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Fecha</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Producto / Lote</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Recepción / Proveedor</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Movimiento</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-right">Cant.</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-right">Saldo</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-right">Stock</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-center">Ubicación</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Ref.</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Operador</th>
+                            </tr>
+                        )}
+                        {activeTab === 'RECETAS' && (
+                            <tr>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Fecha Venta</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Folio Receta</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Paciente</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Producto</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-right">Cant.</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Médico</th>
+                            </tr>
+                        )}
+                        {activeTab === 'CONTROLADOS' && (
+                            <tr>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Fecha</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Producto</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-center">Condición</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest text-right">Cant.</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Paciente</th>
+                                <th className="px-4 py-3 font-black text-gray-500 uppercase tracking-widest">Folio Receta</th>
+                            </tr>
+                        )}
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 font-bold text-gray-700">
+                        {activeTab === 'GENERAL' && logs.map(log => (
+                            <tr key={log.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 whitespace-nowrap">{formatDate(log.created_at)}</td>
+                                <td className="px-4 py-3 text-gray-500">{log.user_name || 'Sistema'}</td>
+                                <td className="px-4 py-3">
+                                    <span className="bg-purple-100 text-[#4C3073] px-2 py-0.5 rounded-sm text-[10px] font-black uppercase tracking-tighter">
+                                        {log.event_type}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-3">{log.description}</td>
+                                <td className="px-4 py-3 text-right">
+                                    <button onClick={() => setSelectedLog(log)} className="text-[#4C3073] hover:underline uppercase text-[10px] font-black">Ver Detalles</button>
+                                </td>
+                            </tr>
+                        ))}
+                        {activeTab === 'LOTES' && batchData.map(item => (
+                            <tr key={item.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 whitespace-nowrap">{formatDate(item.created_at)}</td>
+                                <td className="px-4 py-3">
+                                    <p className="text-gray-900 font-black uppercase text-[11px]">{item.product_name}</p>
+                                    <p className="text-[9px] text-gray-400 font-mono uppercase tracking-tighter">{item.product_dci}</p>
+                                    <div className="mt-1 flex items-center gap-2">
+                                        <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-sm border border-blue-100 font-black">LOTE: {item.batch_number}</span>
+                                        <span className="text-[9px] text-gray-300 font-mono">ID: {item.batch_id?.split('-')[0]}...</span>
+                                    </div>
+                                    <p className="text-[9px] text-gray-400 font-bold mt-1 uppercase">Vence: {item.expiry_date || 'S/V'}</p>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <p className="text-[10px] font-black text-gray-800 uppercase">{getOriginLabel(item)}</p>
+                                    <p className="text-[9px] font-bold text-gray-500 uppercase truncate max-w-[160px]">{getSupplierName(item)}</p>
+                                    <p className="text-[9px] text-gray-400 font-mono">ING: {formatDateOnly(item.received_date || item.purchase_order_date)}</p>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <span className={`uppercase tracking-widest text-[9px] font-black px-1.5 py-0.5 rounded-sm ${item.movement_type === 'RETURN' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                        {item.movement_type}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-3 text-right font-black text-gray-900">{item.quantity}</td>
+                                <td className="px-4 py-3 text-right font-black bg-gray-50/50">{item.balance_after}</td>
+                                <td className="px-4 py-3 text-right">
+                                    <p className="text-[10px] font-black text-gray-900">{formatQuantity(item.current_quantity)}</p>
+                                    <p className="text-[9px] font-bold text-emerald-600">Act: {formatQuantity(item.active_quantity)}</p>
+                                    <p className="text-[9px] font-bold text-amber-600">Cuar: {formatQuantity(item.quarantine_stock)}</p>
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                    <p className="text-[10px] font-black text-gray-600 uppercase">{item.warehouse_name}</p>
+                                    <p className="text-[9px] text-gray-400 font-bold uppercase">{item.location_name}</p>
+                                    <span className={`inline-flex mt-1 text-[8px] font-black px-1.5 py-0.5 rounded-sm border uppercase ${getStateClass(item.warehouse_state)}`}>{item.warehouse_state || 'ACTIVO'}</span>
+                                </td>
+                                <td className="px-4 py-3 text-gray-400 font-mono text-[10px]">{item.reference_folio}</td>
+                                <td className="px-4 py-3 text-[10px] text-gray-500 uppercase">{item.operator_name}</td>
+                            </tr>
+                        ))}
+                        {activeTab === 'RECETAS' && prescriptionData.map(item => (
+                            <tr key={item.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 whitespace-nowrap">{formatDate(item.sale_date)}</td>
+                                <td className="px-4 py-3 text-[#4C3073] font-black">{item.folio_electronico}</td>
+                                <td className="px-4 py-3">
+                                    <p>{item.patient_name}</p>
+                                    <p className="text-[10px] text-gray-400 font-mono">{item.patient_rut}</p>
+                                </td>
+                                <td className="px-4 py-3 font-black text-gray-600">{item.product_name}</td>
+                                <td className="px-4 py-3 text-right font-black text-gray-900">{item.quantity}</td>
+                                <td className="px-4 py-3">
+                                    <p className="text-gray-600">{item.prescriber_name}</p>
+                                    <p className="text-[10px] text-gray-400 font-mono">{item.prescriber_rut}</p>
+                                </td>
+                            </tr>
+                        ))}
+                        {activeTab === 'CONTROLADOS' && controlledData.map(item => (
+                            <tr key={item.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 whitespace-nowrap">{formatDate(item.created_at)}</td>
+                                <td className="px-4 py-3 font-black text-gray-900">{item.product_name}</td>
+                                <td className="px-4 py-3 text-center">
+                                    <span className="bg-red-50 text-red-700 px-2 py-0.5 rounded-sm text-[10px] font-black border border-red-100">
+                                        {item.sale_condition}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-3 text-right font-black text-gray-900">{item.quantity}</td>
+                                <td className="px-4 py-3">
+                                    <p>{item.patient_name || 'S/D'}</p>
+                                    <p className="text-[10px] text-gray-400 font-mono">{item.patient_rut}</p>
+                                </td>
+                                <td className="px-4 py-3 text-[#4C3073] font-black">{item.prescription_folio || 'S/D'}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                {logs.length === 0 && activeTab === 'GENERAL' && !loading && <p className="p-12 text-center text-gray-400 italic">No hay registros generales</p>}
+                {batchData.length === 0 && activeTab === 'LOTES' && !loading && <p className="p-12 text-center text-gray-400 italic">Busque un número de lote para rastrear su historia</p>}
+                {prescriptionData.length === 0 && activeTab === 'RECETAS' && !loading && <p className="p-12 text-center text-gray-400 italic">No hay registros de despacho de recetas</p>}
+                {controlledData.length === 0 && activeTab === 'CONTROLADOS' && !loading && <p className="p-12 text-center text-gray-400 italic">No hay movimientos de productos controlados en el periodo</p>}
+            </div>
+        )}
+      </div>
+
+      {/* Pagination (Only for General) */}
+      {activeTab === 'GENERAL' && (
+        <div className="border-t border-gray-200 bg-white px-6 py-3 flex items-center justify-between shrink-0 print:hidden">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                Mostrando {logs.length} de {count} registros
+            </p>
+            <div className="flex gap-2">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="p-2 border border-gray-200 rounded-sm disabled:opacity-30"><ChevronLeft size={16}/></button>
+                <div className="flex items-center px-4 font-black text-xs text-[#4C3073]">Página {page}</div>
+                <button onClick={() => setPage(p => p + 1)} disabled={logs.length < PAGE_SIZE} className="p-2 border border-gray-200 rounded-sm disabled:opacity-30"><ChevronRight size={16}/></button>
+            </div>
+        </div>
+      )}
+
+      {/* Log Detail Modal - Minimalistic */}
+      {selectedLog && (
+        <div className="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-8 backdrop-blur-sm print:hidden">
+            <div className="bg-white w-full max-w-2xl rounded-sm shadow-2xl flex flex-col max-h-[90vh]">
+                <div className="bg-[#4C3073] p-6 text-white flex justify-between items-center">
+                    <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-70">Auditoría Técnica</p>
+                        <h2 className="text-xl font-black uppercase tracking-tight">{selectedLog.event_type}</h2>
+                    </div>
+                    <button onClick={() => setSelectedLog(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors"><X/></button>
+                </div>
+                <div className="p-8 overflow-auto space-y-6">
+                    <div>
+                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Descripción del Evento</label>
+                        <p className="text-sm font-bold text-gray-800 bg-gray-50 border border-gray-200 p-4 rounded-sm">{selectedLog.description}</p>
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Metadata del Sistema</label>
+                        <pre className="bg-gray-900 text-gray-300 p-4 rounded-sm text-[10px] font-mono overflow-auto max-h-60 leading-relaxed">
+                            {JSON.stringify(selectedLog.metadata, null, 2)}
+                        </pre>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="p-4 bg-gray-50 border border-gray-100 rounded-sm">
+                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Fecha Registro</label>
+                            <p className="text-xs font-black">{formatDate(selectedLog.created_at)}</p>
+                        </div>
+                        <div className="p-4 bg-gray-50 border border-gray-100 rounded-sm">
+                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Usuario</label>
+                            <p className="text-xs font-black">{selectedLog.user_name || 'Sistema'}</p>
+                        </div>
+                    </div>
+                </div>
+                <div className="p-6 border-t border-gray-100 bg-gray-50/50 flex justify-end">
+                    <button onClick={() => setSelectedLog(null)} className="bg-gray-800 text-white px-8 py-2 rounded-sm text-xs font-black uppercase tracking-widest">Cerrar</button>
+                </div>
+            </div>
         </div>
       )}
     </div>

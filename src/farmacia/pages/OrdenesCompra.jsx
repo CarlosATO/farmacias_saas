@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { supabase } from '../../api/supabaseClient';
 import { 
   Plus, Package, Search, X, Check, ArrowLeft, Loader2, 
@@ -21,6 +22,8 @@ import { useSucursal } from '../context/SucursalContext';
 
 export default function OrdenesCompra() {
     const { activeWarehouse } = useSucursal();
+    const location = useLocation();
+    const quickPO = location.state?.quickPO || null;
     const [purchaseOrders, setPurchaseOrders] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
     const [products, setProducts] = useState([]);
@@ -48,6 +51,7 @@ export default function OrdenesCompra() {
     const [receiptData, setReceiptData] = useState({ document_type: 'GUIA_DESPACHO', document_number: '', notes: '', warehouse_id: '' });
     
     const [modalLoading, setModalLoading] = useState(false);
+    const [quickPOBanner, setQuickPOBanner] = useState(null);
 
     const fetchInitialData = useCallback(async () => {
         if (!activeWarehouse?.id) return;
@@ -72,7 +76,7 @@ export default function OrdenesCompra() {
                     supabase
                         .schema('pharmacy')
                         .from('inventory_batches')
-                        .select('product_id, current_quantity, location:location_id!inner(warehouse_id)')
+                        .select('product_id, current_quantity, location:location_id!inner(warehouse_id, location_type)')
                         .eq('location.warehouse_id', activeWarehouse.id)
                 ]);
                 setSuppliers(supRes.data || []);
@@ -81,7 +85,10 @@ export default function OrdenesCompra() {
                 // Construir mapa de stock real por producto
                 const newStockMap = {};
                 (batchRes.data || []).forEach(b => {
-                    newStockMap[b.product_id] = (newStockMap[b.product_id] || 0) + (b.current_quantity || 0);
+                    const activeQty = b.location?.location_type === 'QUARANTINE'
+                        ? 0
+                        : Math.max(0, Number(b.current_quantity || 0));
+                    newStockMap[b.product_id] = (newStockMap[b.product_id] || 0) + activeQty;
                 });
                 setStockMap(newStockMap);
             }
@@ -95,6 +102,24 @@ export default function OrdenesCompra() {
     useEffect(() => {
         fetchInitialData();
     }, [fetchInitialData]);
+
+    useEffect(() => {
+        if (!quickPO || !activeWarehouse?.id || loading) return;
+
+        setQuickPOBanner(quickPO);
+        setView('form');
+        setCurrentPO(prev => ({
+            ...prev,
+            observation_notes: quickPO.observation_notes || prev.observation_notes,
+            items: quickPO.product_id ? [{
+                product_id: quickPO.product_id,
+                name: quickPO.product_name,
+                quantity: Number(quickPO.quantity || 1),
+                unit_cost: Number(quickPO.unit_cost || 0),
+                conversion_factor: Number(quickPO.conversion_factor || 1),
+            }] : prev.items,
+        }));
+    }, [quickPO, activeWarehouse?.id, loading]);
 
     const getStatusBadge = (status) => {
         const styles = {
@@ -836,6 +861,18 @@ export default function OrdenesCompra() {
 
     return (
         <div className="flex flex-col h-[calc(100vh-140px)] bg-gray-50 font-sans text-gray-800 text-sm overflow-hidden animate-in fade-in duration-150">
+            {quickPOBanner && (
+                <div className="mx-6 mt-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 shrink-0">
+                    <div className="flex items-center justify-between gap-4">
+                        <div>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Acción rápida</p>
+                            <p className="font-black uppercase">Crear OC rápida</p>
+                            <p className="text-xs font-bold mt-1">Producto sugerido: {quickPOBanner.product_name}</p>
+                        </div>
+                        <button onClick={() => setQuickPOBanner(null)} className="text-emerald-500 hover:text-emerald-700 font-black text-lg leading-none">×</button>
+                    </div>
+                </div>
+            )}
             <div className="border-b border-gray-200 px-6 py-3 bg-white flex flex-col gap-2 shadow-sm shrink-0">
                 <div className="flex items-center text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                     <span className="hover:text-gray-900 cursor-pointer" onClick={() => setView('list')}>Órdenes de Compra</span>

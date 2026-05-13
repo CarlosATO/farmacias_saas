@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { 
   ArrowLeft, MapPin, Package, Calendar, AlertTriangle, 
   CheckCircle2, Info, Search, Send, Loader2, Pill, Building2
@@ -7,9 +7,12 @@ import {
 import { getPharmacySchema, getMyCompanyId } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 
+const getBatchQuarantineQty = (batch) => batch.location?.location_type === 'QUARANTINE' ? Number(batch.current_quantity || 0) : 0;
+
 export default function MapaLotes() {
   const { productId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { activeWarehouse } = useSucursal();
 
   const [product, setProduct] = useState(null);
@@ -17,6 +20,12 @@ export default function MapaLotes() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showOnlyWithStock, setShowOnlyWithStock] = useState(true);
+
+  useEffect(() => {
+    if (location.state?.batchNumber) {
+      setSearchTerm(location.state.batchNumber);
+    }
+  }, [location.state]);
 
   const loadData = useCallback(async () => {
     if (!activeWarehouse?.id || !productId) return;
@@ -43,6 +52,7 @@ export default function MapaLotes() {
           location:location_id!inner(
             id, 
             name, 
+            location_type,
             warehouse_id, 
             parent_location:parent_location_id(id, name)
           )
@@ -227,8 +237,13 @@ export default function MapaLotes() {
                                 </div>
                                 <div className="text-right">
                                    <span className="text-[9px] font-black text-gray-400 uppercase block mb-1">Cantidad</span>
-                                   <span className="text-xl font-black text-slate-900">{batch.current_quantity} <span className="text-[10px] text-gray-400">UN</span></span>
-                                </div>
+                                    <span className="text-xl font-black text-slate-900">{batch.current_quantity} <span className="text-[10px] text-gray-400">UN</span></span>
+                                    {getBatchQuarantineQty(batch) > 0 && (
+                                      <div className="mt-1 text-[9px] font-black uppercase text-amber-600">
+                                        En cuarentena: {getBatchQuarantineQty(batch)}
+                                      </div>
+                                    )}
+                                 </div>
                              </div>
                              
                              <div className="flex items-center justify-between pt-3 border-t border-gray-100/50 mt-1">

@@ -1,16 +1,278 @@
-# React + Vite
+# 🏥 FARMADATIX SaaS — CONTEXTO MAESTRO DEL PROYECTO
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## ⚠️ REGLAS OBLIGATORIAS PARA AGENTES
 
-Currently, two official plugins are available:
+### Backend y Base de Datos
+- Leer SIEMPRE `supabase/migrations/` antes de modificar lógica.
+- `supabase/migrations/` es la fuente oficial del backend.
+- NO asumir columnas, funciones o tablas.
+- NO usar información obsoleta de `.md` antiguos si contradicen migrations.
+- Toda lógica crítica debe vivir en PostgreSQL/RPC, NO en React.
+- Nunca romper:
+  - multiempresa,
+  - company_id,
+  - RLS,
+  - trazabilidad,
+  - auditoría,
+  - kardex.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+# 🧠 ARQUITECTURA GENERAL
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Stack
+- React + Vite
+- Supabase
+- PostgreSQL
+- RPC SQL
+- SaaS Multiempresa
+- Esquema principal: `pharmacy`
 
-## Expanding the ESLint configuration
+## Arquitectura correcta
+```text
+Frontend React = UX
+Backend PostgreSQL/RPC = autoridad legal y lógica real
+Supabase = ejecución/datos en tiempo real
+supabase/migrations = fuente oficial del backend
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+🏢 MULTITENANT SaaS
+Seguridad obligatoria
+
+Toda tabla crítica debe incluir:
+
+company_id
+created_by
+updated_by
+RLS
+
+Las políticas RLS son obligatorias.
+Ninguna empresa puede:
+
+leer,
+modificar,
+consultar,
+datos de otra empresa.
+🏥 ARQUITECTURA FARMACIA
+Esquema principal
+pharmacy
+Objetivo
+
+Sistema farmacéutico SaaS orientado a:
+
+ISP
+MINSAL
+trazabilidad
+auditoría
+escalabilidad enterprise
+📦 TOPOLOGÍA WMS
+Bodegas
+
+Tabla:
+
+warehouses
+Ubicaciones
+
+Tabla:
+
+locations
+
+Tipos:
+
+QUARANTINE
+STORAGE
+SALES
+Regla crítica
+
+Solo SALES puede descontar stock en POS.
+
+📦 INVENTARIO Y LOTES
+ADN del stock
+
+Tabla:
+
+inventory_batches
+
+Campos críticos:
+
+batch_number
+expiry_date
+location_id
+FEFO
+
+La salida debe priorizar:
+
+lote con vencimiento más cercano
+Kardex
+
+Tabla:
+
+inventory_movements
+
+Movement types válidos:
+
+SALE
+RECEIPT
+TRANSFER
+ADJUSTMENT
+Importante
+
+Usar SOLO:
+
+from_location_id
+to_location_id
+
+NO usar:
+
+source_location_id
+destination_location_id
+💊 RECETAS Y POS
+Estados válidos receta
+PENDING
+PARTIAL
+DISPENSED
+EXPIRED
+CANCELLED
+Tipos receta
+RECETA_SIMPLE
+RECETA_RETENIDA
+RECETA_CHEQUE
+Condiciones venta
+VD
+R
+RR
+RCH
+Reglas críticas
+Backend valida TODO.
+React solo mejora UX.
+process_pharmacy_sale es autoridad final.
+Validaciones obligatorias backend
+stock,
+receta válida,
+receta vigente,
+paciente correcto,
+cantidad pendiente,
+tipo receta correcto,
+kardex,
+auditoría,
+FEFO.
+🧾 TRANSACCIONALIDAD
+RPC crítica
+process_pharmacy_sale
+
+Responsable de:
+
+ventas,
+stock,
+kardex,
+recetas,
+quantity_dispensed,
+auditoría.
+Regla
+
+Toda venta debe ocurrir en UNA transacción SQL.
+
+NO duplicar lógica en frontend.
+
+🔍 PERFORMANCE Y ESCALABILIDAD
+Objetivo
+
+Arquitectura SaaS para múltiples farmacias concurrentes.
+
+Reglas
+evitar sobreconsultas,
+usar búsquedas optimizadas,
+usar debounce,
+limitar resultados,
+evitar loops de queries,
+preferir RPC batch.
+Futuro
+
+Preparar arquitectura para:
+
+React Query,
+cache,
+lazy loading,
+virtualización.
+🎨 GUÍA UI/UX — DATIX
+Estilo
+
+Sobrio, ejecutivo, elegante.
+
+NO:
+
+animaciones excesivas,
+degradados,
+interfaces “divertidas”.
+🎨 PALETA
+Color principal
+#4C3073
+Fondo
+#f8f9fa
+Contenedores
+blancos,
+bordes suaves,
+shadow-sm.
+🧭 NAVEGACIÓN
+Arquitectura
+
+Document-Centric.
+
+NO usar modales para CRUD complejos.
+
+Usar:
+
+LIST
+FORM fullscreen
+🧱 FORMULARIOS
+Labels
+uppercase
+text-[11px]
+text-gray-500
+Inputs
+sobrios,
+simples,
+text-sm
+🧩 ICONOS
+
+Usar SOLO:
+
+Lucide React
+⚡ MICROINTERACCIONES
+
+NO usar:
+
+animate-pulse
+transiciones pesadas
+efectos exagerados
+
+Preferir:
+
+instantáneo,
+fade corto,
+UI rápida.
+🧠 RESPUESTAS DEL AGENTE
+Obligatorio
+máximo 100 palabras,
+frases cortas,
+directo,
+no explicar de más,
+esperar siguiente instrucción.
+Formato
+3 a 6 frases máximo,
+usar viñetas solo si ayuda.
+🚨 REGLA DE ORO
+
+Si una validación afecta:
+
+stock,
+recetas,
+auditoría,
+legalidad,
+multiempresa,
+kardex,
+trazabilidad,
+
+ENTONCES:
+
+la lógica debe implementarse en PostgreSQL/RPC
+NO en React

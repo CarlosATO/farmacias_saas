@@ -26,6 +26,8 @@ const MapaLotes = lazy(() => import('./farmacia/pages/MapaLotes'));
 const MapaLotesIndex = lazy(() => import('./farmacia/pages/MapaLotesIndex'));
 const ControlCaja = lazy(() => import('./farmacia/pages/ControlCaja'));
 const OperadoresPOS = lazy(() => import('./farmacia/pages/OperadoresPOS'));
+const DocumentosTributarios = lazy(() => import('./farmacia/pages/DocumentosTributarios'));
+const Devoluciones = lazy(() => import('./farmacia/pages/Devoluciones'));
 
 const PageLoader = () => (
   <div className="h-screen flex flex-col items-center justify-center bg-gray-50">
@@ -111,7 +113,9 @@ export default function App() {
             <Route path="auditoria" element={<Suspense fallback={<PageLoader />}><Auditoria /></Suspense>} />
             <Route path="operadores-pos" element={<Suspense fallback={<PageLoader />}><OperadoresPOS /></Suspense>} />
             <Route path="control-caja" element={<Suspense fallback={<PageLoader />}><ControlCaja /></Suspense>} />
+            <Route path="documentos-tributarios" element={<Suspense fallback={<PageLoader />}><DocumentosTributarios /></Suspense>} />
             <Route path="pricing" element={<GestionPrecios />} />
+            <Route path="devoluciones" element={<Suspense fallback={<PageLoader />}><Devoluciones /></Suspense>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

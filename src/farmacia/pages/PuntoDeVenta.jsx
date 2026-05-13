@@ -11,11 +11,13 @@ import {
   fetchPharmacyPatients, createPharmacyPatient, createPrescriptionWithItems,
   fetchPrescriptionByFolio, fetchPrescriptionItems,
   fetchPendingPrescriptionsByPatient,
-  fetchDoctors, createDoctor, normalizeRut
+  fetchDoctors, createDoctor, normalizeRut,
+  fetchDteById, fetchSaleItems, fetchBioequivalentSuggestions
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
 import SearchableSelect from '../components/SearchableSelect';
+import { printInternalDte, downloadDtePdf } from '../services/dteService';
 
 const billDenominations = [20000, 10000, 5000, 2000, 1000];
 const coinDenominations = [500, 100, 50, 10];
@@ -78,6 +80,9 @@ export default function PuntoDeVenta() {
   const [pendingRecipesModal, setPendingRecipesModal] = useState({ open: false, prescriptions: [], loading: false, selected: new Set(), detailPrescription: null });
   // IDs de recetas creadas en express durante esta sesión de carrito (para excluir del modal de pendientes)
   const [expressCreatedPrescriptionIds, setExpressCreatedPrescriptionIds] = useState(new Set());
+  // Receipt confirmation after successful sale
+  const [saleReceipt, setSaleReceipt] = useState(null); // { sale_id, dte_id, dte_doc, items, total_amount, payment_method, dte_warning }
+  const [bioequivalentPanel, setBioequivalentPanel] = useState({ open: false, product: null, suggestions: [], loading: false });
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
 
@@ -199,6 +204,16 @@ export default function PuntoDeVenta() {
       
       let updatedCart = [...cart];
       for (const prescription of selectedPrescriptions) {
+        // Check expiration with 1 day grace period
+        if (prescription.valid_until) {
+          const expiryDate = new Date(prescription.valid_until);
+          const graceDate = new Date(expiryDate.getTime() + (24 * 60 * 60 * 1000));
+          if (new Date() > graceDate) {
+            alert(`La receta ${prescription.folio_electronico} se encuentra vencida y no puede cargarse.`);
+            continue;
+          }
+        }
+
         const items = prescription.items || [];
         if (!items.length) continue;
         
@@ -383,6 +398,23 @@ export default function PuntoDeVenta() {
       if (error || !prescription) {
         alert("No se encontró la receta solicitada.");
         return;
+      }
+
+      if (prescription.status === 'DISPENSED') {
+        alert("Esta receta ya ha sido despachada completamente.");
+        setValidationModal(prev => ({ ...prev, isLoading: false }));
+        return;
+      }
+
+      // Check expiration with 1 day grace period
+      if (prescription.valid_until) {
+        const expiryDate = new Date(prescription.valid_until);
+        const graceDate = new Date(expiryDate.getTime() + (24 * 60 * 60 * 1000));
+        if (new Date() > graceDate) {
+          alert("Esta receta se encuentra vencida.");
+          setValidationModal(prev => ({ ...prev, isLoading: false }));
+          return;
+        }
       }
 
       const { data: items, error: itemsError } = await fetchPrescriptionItems(prescription.id);
@@ -782,8 +814,35 @@ export default function PuntoDeVenta() {
       };
 
       const sale = await createSaleWithItems(saleHeader, updatedCart, activeWarehouse.id);
-      const saleId = sale?.id || sale?.sale_id || sale?.sale?.id || '';
-      alert(`Venta #${saleId.slice(0,8) || 'OK'} procesada correctamente.`);
+      
+      // Build receipt data for the confirmation overlay
+      let dteDoc = null;
+      let saleItems = [];
+      if (sale?.dte_id) {
+        try {
+          const [{ data: dte }, { data: items }] = await Promise.all([
+            fetchDteById(sale.dte_id),
+            fetchSaleItems(sale.sale_id)
+          ]);
+          dteDoc = dte;
+          saleItems = items || [];
+        } catch (e) {
+          console.warn('No se pudo cargar detalle DTE:', e);
+        }
+      } else if (sale?.sale_id) {
+        const { data: items } = await fetchSaleItems(sale.sale_id);
+        saleItems = items || [];
+      }
+
+      setSaleReceipt({
+        sale_id: sale?.sale_id,
+        dte_id: sale?.dte_id,
+        dte_doc: dteDoc,
+        dte_warning: sale?.dte_warning || null,
+        items: saleItems,
+        total_amount: sale?.total_amount || saleHeader.total_amount,
+        payment_method: sale?.payment_method || saleHeader.payment_method
+      });
       
       setCart([]);
       setExpressCreatedPrescriptionIds(new Set()); // Limpiar IDs de recetas express al finalizar venta
@@ -809,6 +868,26 @@ export default function PuntoDeVenta() {
     if (c === 'R' || c === 'RECETA_SIMPLE') return 'bg-yellow-100 text-yellow-800 border-yellow-200';
     if (c === 'RR' || c === 'RCH' || c === 'RECETA_RETENIDA' || c === 'RECETA_CHEQUE') return 'bg-red-100 text-red-800 border-red-200';
     return 'bg-slate-100 text-slate-800 border-slate-200';
+  };
+
+  const openBioequivalentPanel = async (product) => {
+    if (!activeWarehouse?.id) return;
+    setBioequivalentPanel({ open: true, product, suggestions: [], loading: true });
+    try {
+      const suggestions = await fetchBioequivalentSuggestions(product.id, activeWarehouse.id);
+      setBioequivalentPanel(prev => ({ ...prev, suggestions, loading: false }));
+    } catch (err) {
+      console.error(err);
+      setBioequivalentPanel(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const addAlternativeToCart = (alt) => {
+    const product = products.find(p => p.id === alt.product_id);
+    if (product) {
+      tryAddToCart(product);
+    }
+    setBioequivalentPanel({ open: false, product: null, suggestions: [], loading: false });
   };
 
   const getConditionLabel = (p) => {
@@ -1147,18 +1226,28 @@ export default function PuntoDeVenta() {
                             </span>
                           </td>
                           <td className="px-4 py-5 text-center">
-                            <button 
-                              disabled={!hasStock}
-                              className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all active:scale-90 ${
-                                !hasStock 
-                                ? 'bg-slate-50 text-slate-200 cursor-not-allowed' 
-                                : isSelected 
-                                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200' 
-                                  : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
-                              }`}
-                            >
-                              <Plus size={18} />
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              <button 
+                                disabled={!hasStock}
+                                onClick={(e) => { e.stopPropagation(); hasStock && tryAddToCart(p); }}
+                                className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all active:scale-90 ${
+                                  !hasStock 
+                                  ? 'bg-slate-50 text-slate-200 cursor-not-allowed' 
+                                  : isSelected 
+                                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200' 
+                                    : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                                }`}
+                              >
+                                <Plus size={18} />
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); openBioequivalentPanel(p); }}
+                                className="w-10 h-10 flex items-center justify-center rounded-xl text-[10px] font-black uppercase bg-purple-50 text-[#4C3073] hover:bg-purple-100 border border-purple-200 transition-all active:scale-90"
+                                title="Ver bioequivalentes"
+                              >
+                                B
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1173,6 +1262,82 @@ export default function PuntoDeVenta() {
                 <span className="flex items-center gap-1"><Keyboard size={12} /> flechas para navegar</span>
                 <span className="flex items-center gap-1"><ArrowLeft size={12} /> enter para agregar</span>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {/* PANEL: BIOEQUIVALENTES                                            */}
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {bioequivalentPanel.open && (
+        <div className="fixed inset-0 z-[105] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setBioequivalentPanel({ open: false, product: null, suggestions: [], loading: false }); }}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden border border-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <div className="text-[10px] font-black text-purple-500 uppercase tracking-widest">Alternativas farmacéuticas</div>
+                <h2 className="text-lg font-black text-slate-800 mt-0.5">{bioequivalentPanel.product?.name || 'Producto'}</h2>
+                <p className="text-xs text-slate-400 font-medium">DCI: {bioequivalentPanel.product?.dci || '-'}</p>
+              </div>
+              <button onClick={() => setBioequivalentPanel({ open: false, product: null, suggestions: [], loading: false })}
+                className="p-2 hover:bg-slate-100 rounded-xl transition-colors"><X size={20} className="text-slate-400" /></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {bioequivalentPanel.loading ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-3">
+                  <Loader2 size={32} className="animate-spin text-purple-500" />
+                  <p className="text-sm font-black text-slate-400 uppercase tracking-widest">Buscando alternativas...</p>
+                </div>
+              ) : bioequivalentPanel.suggestions.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-300">
+                  <FlaskConical size={48} className="mb-4 opacity-20" />
+                  <p className="text-sm font-black uppercase tracking-widest">Sin alternativas disponibles</p>
+                  <p className="text-xs font-medium mt-2">No hay productos bioequivalentes con stock en esta sucursal</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {bioequivalentPanel.suggestions.map((alt) => (
+                    <div key={alt.product_id} className="rounded-2xl border border-slate-200 p-4 hover:border-purple-200 hover:shadow-md transition-all">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-black text-slate-800">{alt.product_name}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[11px] text-slate-400 font-medium uppercase">{alt.laboratory || 'Sin laboratorio'}</span>
+                            <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black border ${getBadgeColor(alt.sale_condition)}`}>
+                              {getConditionLabel(alt)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-4 mt-3 text-xs">
+                            <span className="flex items-center gap-1 text-slate-600">
+                              <Package size={14} className="text-emerald-500" />
+                              Stock: <strong className="text-slate-800">{alt.stock_available}</strong>
+                            </span>
+                            <span className="flex items-center gap-1 text-slate-600">
+                              <span className="text-amber-500 font-bold">Vto:</span>
+                              {alt.next_expiry ? new Date(alt.next_expiry).toLocaleDateString('es-CL') : 'S/V'}
+                            </span>
+                            <span className="font-black text-slate-700">{fmtCLP(alt.sale_price)}</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => addAlternativeToCart(alt)}
+                          className="shrink-0 px-4 py-2 rounded-xl bg-purple-600 text-white text-xs font-black uppercase tracking-widest hover:bg-purple-700 transition-all active:scale-95 shadow-md shadow-purple-200 flex items-center gap-2"
+                        >
+                          <Plus size={14} /> Agregar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">
+                Alternativas con misma concentración y forma farmacéutica
+              </p>
             </div>
           </div>
         </div>
@@ -1863,6 +2028,146 @@ export default function PuntoDeVenta() {
                 className="w-full py-5 bg-[#4C3073] text-white rounded-3xl font-black uppercase text-lg shadow-xl shadow-purple-200 hover:bg-[#3f285f] disabled:opacity-30 active:scale-[0.98] transition-all flex items-center justify-center gap-3"
               >
                 {isProcessingSale ? <Loader2 className="animate-spin" /> : 'Activar Turno y Abrir Caja'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── RECEIPT CONFIRMATION OVERLAY ── */}
+      {saleReceipt && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-lg rounded-sm shadow-2xl flex flex-col max-h-[90vh] overflow-hidden font-sans" id="pos-receipt-panel">
+
+            {/* ── Header ── */}
+            <div className="bg-[#4C3073] px-6 py-5 flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <CheckCircle2 size={22} className="text-emerald-400" />
+                  <span className="text-white font-black text-lg uppercase tracking-tight">
+                    {saleReceipt.dte_doc
+                      ? `BOLETA INTERNA FOLIO ${saleReceipt.dte_doc.folio}`
+                      : 'VENTA REGISTRADA'}
+                  </span>
+                </div>
+                <p className="text-white/60 text-xs font-bold uppercase tracking-widest">
+                  {saleReceipt.dte_doc
+                    ? `Emitida el ${new Intl.DateTimeFormat('es-CL',{dateStyle:'short',timeStyle:'short'}).format(new Date(saleReceipt.dte_doc.issued_at))}`
+                    : 'BOLETA INTERNA PENDIENTE DE GENERACIÓN'}
+                </p>
+              </div>
+              <button onClick={() => setSaleReceipt(null)} className="text-white/50 hover:text-white transition-colors mt-1">
+                <X size={22} />
+              </button>
+            </div>
+
+            {/* ── DTE pending warning ── */}
+            {saleReceipt.dte_warning && (
+              <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-center gap-2 text-amber-700">
+                <ShieldAlert size={16} className="shrink-0" />
+                <p className="text-[11px] font-bold">{saleReceipt.dte_warning}</p>
+              </div>
+            )}
+
+            {/* ── Badge ── */}
+            <div className="bg-red-50 border-b border-red-200 px-6 py-2 flex items-center justify-center gap-2">
+              <ShieldAlert size={13} className="text-red-600" />
+              <span className="text-[10px] font-black text-red-700 uppercase tracking-widest">DOCUMENTO INTERNO — NO VÁLIDO TRIBUTARIAMENTE</span>
+            </div>
+
+            {/* ── Content ── */}
+            <div className="flex-1 overflow-auto px-6 py-5 space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-gray-50 border border-gray-100 rounded-sm p-3">
+                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Vendido</p>
+                  <p className="text-2xl font-black text-gray-900">
+                    {new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(saleReceipt.total_amount)}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-sm p-3">
+                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Medio de Pago</p>
+                  <p className="text-lg font-black text-gray-700">{saleReceipt.payment_method || 'CASH'}</p>
+                  {saleReceipt.dte_doc && (
+                    <p className="text-[9px] text-[#4C3073] font-bold mt-1">Folio: #{saleReceipt.dte_doc.folio}</p>
+                  )}
+                </div>
+              </div>
+
+              {saleReceipt.items.length > 0 && (
+                <div className="border border-gray-200 rounded-sm overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+                    <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Productos Vendidos</p>
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-100">
+                        <th className="px-4 py-2 text-left text-[9px] font-black text-gray-400 uppercase">Producto</th>
+                        <th className="px-4 py-2 text-center text-[9px] font-black text-gray-400 uppercase">Cant</th>
+                        <th className="px-4 py-2 text-right text-[9px] font-black text-gray-400 uppercase">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {saleReceipt.items.map((item, i) => (
+                        <tr key={i}>
+                          <td className="px-4 py-2 font-bold text-gray-800 uppercase">{item.product?.name || 'Producto'}</td>
+                          <td className="px-4 py-2 text-center text-gray-600">{item.quantity}</td>
+                          <td className="px-4 py-2 text-right font-bold text-gray-800">
+                            {new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(item.subtotal)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* ── Footer Actions ── */}
+            <div className="border-t border-gray-200 px-6 py-4 bg-gray-50 flex flex-wrap gap-2 justify-between items-center">
+              <div className="flex gap-2 flex-wrap">
+
+                {/* Ver Boleta */}
+                {saleReceipt.dte_doc ? (
+                  <button
+                    onClick={() => printInternalDte(saleReceipt.dte_doc, saleReceipt.items)}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-[#4C3073] text-white text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-[#3a2457] transition-colors"
+                  >
+                    <Receipt size={15} />
+                    Ver Boleta
+                  </button>
+                ) : (
+                  <div className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 text-[11px] font-black uppercase tracking-widest rounded-sm cursor-not-allowed">
+                    <Receipt size={15} />
+                    Boleta Pendiente
+                  </div>
+                )}
+
+                {/* Imprimir */}
+                <button
+                  onClick={() => printInternalDte(saleReceipt.dte_doc, saleReceipt.items)}
+                  disabled={!saleReceipt.dte_doc}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-gray-800 text-white text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Banknote size={15} />
+                  Imprimir
+                </button>
+
+                {/* Descargar PDF */}
+                <button
+                  onClick={() => downloadDtePdf(saleReceipt.dte_doc, saleReceipt.items)}
+                  disabled={!saleReceipt.dte_doc}
+                  className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-gray-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ArrowUpCircle size={15} />
+                  Descargar PDF
+                </button>
+              </div>
+
+              <button
+                onClick={() => setSaleReceipt(null)}
+                className="px-4 py-2 text-[11px] font-black text-[#4C3073] uppercase tracking-widest hover:underline transition-colors"
+              >
+                Nueva Venta
               </button>
             </div>
           </div>

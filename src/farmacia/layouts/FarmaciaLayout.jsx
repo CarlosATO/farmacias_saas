@@ -13,6 +13,7 @@ import {
   Package,
   Pill,
   Receipt,
+  RotateCcw,
   Settings,
   ShoppingCart,
   Stethoscope,
@@ -53,12 +54,14 @@ const RIBBON_TABS = [
     id: 'ventas',
     label: 'Ventas',
     type: 'group',
-    match: ['/pos', '/control-caja', '/pricing', '/recetas'],
+    match: ['/pos', '/control-caja', '/pricing', '/recetas', '/documentos-tributarios'],
     items: [
       { to: '/pos', label: 'POS', icon: ShoppingCart, match: ['/pos'] },
       { to: '/control-caja', label: 'Control de Caja', icon: Wallet, match: ['/control-caja'] },
       { to: '/pricing', label: 'Precios', icon: DollarSign, match: ['/pricing'] },
       { to: '/recetas', label: 'Recetas', icon: FileText, match: ['/recetas'] },
+      { to: '/documentos-tributarios', label: 'DTE Interno', icon: Receipt, match: ['/documentos-tributarios'] },
+      { to: '/devoluciones', label: 'Devoluciones', icon: RotateCcw, match: ['/devoluciones'] },
     ],
   },
   {
@@ -93,7 +96,7 @@ const RIBBON_TABS = [
       { to: '/operadores-pos', label: 'Operadores POS', icon: User, match: ['/operadores-pos'] },
       { to: '/auditoria', label: 'Auditoria', icon: FileText, match: ['/auditoria'] },
       { to: '/mapa-logistico', label: 'Ubicaciones', icon: MapPin, match: ['/mapa-logistico'] },
-      { label: 'SII', icon: Settings, disabled: true },
+      { to: '/documentos-tributarios', label: 'SII (DTE)', icon: Settings, match: ['/documentos-tributarios'] },
     ],
   },
 ];

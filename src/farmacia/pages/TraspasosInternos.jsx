@@ -1,10 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { getPharmacySchema, getMyCompanyId, createTransferRequest } from '../api/pharmacyClient';
 import { ArrowRightLeft, Search, Package, MapPin, ShoppingCart, FileText, X, CheckCircle2, GripVertical, CheckSquare, Square, Check, ArrowRight, ChevronLeft } from 'lucide-react';
 import { useSucursal } from '../context/SucursalContext';
 
+const getBatchAvailableQty = (batch) => Math.max(0, Number(batch.current_quantity || 0));
+
 export default function TraspasosInternos() {
     const { activeWarehouse } = useSucursal();
+    const location = useLocation();
+    const quickTransfer = location.state?.quickTransfer || null;
     const [warehouses, setWarehouses] = useState([]);
     const [locations, setLocations] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -46,6 +51,7 @@ export default function TraspasosInternos() {
     const [assignedDestinations, setAssignedDestinations] = useState([]); // { batch, transferQuantity, dest_location_id }
     
     const [isTransferring, setIsTransferring] = useState(false);
+    const [quickBanner, setQuickBanner] = useState(null);
 
     // UX States
     const [dropHoveredId, setDropHoveredId] = useState(null);
@@ -54,6 +60,20 @@ export default function TraspasosInternos() {
     useEffect(() => {
         fetchData();
     }, []);
+
+    useEffect(() => {
+        if (!quickTransfer || !activeWarehouse?.id) return;
+
+        setQuickBanner(quickTransfer);
+        setSearchQuery(quickTransfer.batch_number || quickTransfer.product_name || '');
+        setWorkflowStep('PICKING');
+        setTransferData(prev => ({
+            ...prev,
+            source_warehouse_id: activeWarehouse.id,
+            dest_warehouse_id: activeWarehouse.id,
+            notes: quickTransfer.notes || prev.notes,
+        }));
+    }, [quickTransfer, activeWarehouse?.id]);
 
     const fetchData = async () => {
         try {
@@ -86,7 +106,7 @@ export default function TraspasosInternos() {
         } else {
             setAllSourceBatches([]);
         }
-    }, [transferData.source_zone_id, locations]);
+    }, [transferData.source_zone_id, locations, transferData.source_warehouse_id]);
 
     useEffect(() => {
         if (transferData.dest_warehouse_id) {
@@ -99,24 +119,52 @@ export default function TraspasosInternos() {
                 }
             } else {
                 const currentDestZone = locations.find(l => l.id === transferData.dest_zone_id);
-                if (currentDestZone && currentDestZone.location_type === 'QUARANTINE') {
+                if (currentDestZone && currentDestZone.location_type === 'QUARANTINE' && quickTransfer?.mode !== 'MOVE_TO_QUARANTINE') {
                     setTransferData(prev => ({ ...prev, dest_zone_id: '', dest_location_id: '' }));
                 }
             }
         }
-    }, [transferData.dest_warehouse_id, transferData.source_warehouse_id, transferData.dest_zone_id, locations]);
+    }, [transferData.dest_warehouse_id, transferData.source_warehouse_id, transferData.dest_zone_id, locations, quickTransfer?.mode]);
+
+    useEffect(() => {
+        if (!quickTransfer || quickTransfer.mode !== 'MOVE_TO_QUARANTINE' || !locations.length || !activeWarehouse?.id) return;
+
+        const quarantineLoc = locations.find(l => l.warehouse_id === activeWarehouse.id && l.location_type === 'QUARANTINE' && !l.parent_location_id);
+        if (!quarantineLoc) return;
+
+        setTransferData(prev => ({
+            ...prev,
+            source_warehouse_id: activeWarehouse.id,
+            dest_warehouse_id: activeWarehouse.id,
+            dest_zone_id: quarantineLoc.id,
+            dest_location_id: quarantineLoc.id,
+        }));
+    }, [quickTransfer, locations, activeWarehouse?.id]);
 
     const fetchSourceInventory = async (zoneId) => {
         try {
+            const companyId = await getMyCompanyId();
+            if (!companyId || !transferData.source_warehouse_id) return;
+
+            const selectedZone = locations.find(l => l.id === zoneId);
             const childIds = locations.filter(l => l.parent_location_id === zoneId).map(l => l.id);
             const allIds = [zoneId, ...childIds];
             
             const schema = getPharmacySchema();
-            const { data } = await schema
+            let query = schema
                 .from('inventory_batches')
-                .select('*, product:product_id(*), location:location_id(*)')
+                .select('*, product:product_id(*), location:location_id!inner(*)')
+                .eq('company_id', companyId)
+                .eq('location.company_id', companyId)
+                .eq('location.warehouse_id', transferData.source_warehouse_id)
                 .in('location_id', allIds)
                 .gt('current_quantity', 0);
+
+            if (selectedZone?.location_type === 'QUARANTINE') {
+                query = query.eq('location.location_type', 'QUARANTINE');
+            }
+
+            const { data } = await query;
 
             setAllSourceBatches(data || []);
         } catch (error) {
@@ -126,7 +174,7 @@ export default function TraspasosInternos() {
 
     const handleStagingQtyChange = (batch, qty) => {
         const val = parseInt(qty) || 0;
-        const validQty = Math.max(0, Math.min(val, batch.current_quantity));
+        const validQty = Math.max(0, Math.min(val, getBatchAvailableQty(batch)));
         setStagingItems(prev => ({
             ...prev,
             [batch.id]: validQty
@@ -309,7 +357,7 @@ export default function TraspasosInternos() {
         if (isInterSucursal) {
             destZones = locations.filter(l => l.warehouse_id === transferData.dest_warehouse_id && l.location_type === 'QUARANTINE' && !l.parent_location_id);
         } else {
-            destZones = locations.filter(l => l.warehouse_id === transferData.dest_warehouse_id && l.location_type !== 'QUARANTINE' && !l.parent_location_id);
+            destZones = locations.filter(l => l.warehouse_id === transferData.dest_warehouse_id && !l.parent_location_id && (quickTransfer?.mode === 'MOVE_TO_QUARANTINE' ? true : l.location_type !== 'QUARANTINE'));
         }
     }
     const destSpecifics = locations.filter(l => l.parent_location_id === transferData.dest_zone_id);
@@ -317,11 +365,16 @@ export default function TraspasosInternos() {
     const filteredSourceBatches = useMemo(() => {
         if (!searchQuery.trim()) return [];
         const q = searchQuery.toLowerCase();
-        return allSourceBatches.filter(b => 
-            b.product?.name?.toLowerCase().includes(q) || 
-            b.product?.sku?.toLowerCase().includes(q) ||
-            b.batch_number?.toLowerCase().includes(q)
-        );
+        return allSourceBatches.filter(b => {
+            const hasActiveStock = getBatchAvailableQty(b) > 0;
+            const matchesQuery = b.product?.name?.toLowerCase().includes(q) || 
+                b.product?.sku?.toLowerCase().includes(q) ||
+                b.product?.dci?.toLowerCase().includes(q) ||
+                b.batch_number?.toLowerCase().includes(q) ||
+                b.location?.name?.toLowerCase().includes(q) ||
+                b.location?.location_type?.toLowerCase().includes(q);
+            return hasActiveStock && matchesQuery;
+        });
     }, [allSourceBatches, searchQuery]);
 
     const consolidatedSummary = useMemo(() => {
@@ -367,6 +420,18 @@ export default function TraspasosInternos() {
 
     return (
         <div className="h-full flex flex-col bg-gray-50 overflow-hidden relative">
+            {quickBanner && (
+                <div className="mx-4 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shrink-0">
+                    <div className="flex items-center justify-between gap-4">
+                        <div>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">Acción rápida</p>
+                            <p className="font-black uppercase">{quickBanner.mode === 'MOVE_TO_QUARANTINE' ? 'Mover a cuarentena' : 'Transferir stock'}</p>
+                            <p className="text-xs font-bold mt-1">Producto: {quickBanner.product_name} {quickBanner.batch_number ? `| Lote: ${quickBanner.batch_number}` : ''}</p>
+                        </div>
+                        <button onClick={() => setQuickBanner(null)} className="text-amber-500 hover:text-amber-700 font-black text-lg leading-none">×</button>
+                    </div>
+                </div>
+            )}
             
             {/* MODAL DE DISTRIBUCIÓN */}
             {dropModal.open && (
@@ -514,13 +579,13 @@ export default function TraspasosInternos() {
                             
                             {transferData.source_zone_id && (
                                 <div className="relative mt-2">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                                    <input 
-                                        type="text" 
-                                        placeholder="Escanear o buscar producto por nombre/SKU..."
-                                        className="w-full border border-gray-300 rounded-md pl-10 pr-4 py-2 text-sm outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition-shadow"
-                                        value={searchQuery}
-                                        onChange={e => setSearchQuery(e.target.value)}
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                                        <input 
+                                            type="text" 
+                                            placeholder="Buscar por producto, DCI, lote o ubicación..."
+                                            className="w-full border border-gray-300 rounded-md pl-10 pr-4 py-2 text-sm outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition-shadow"
+                                            value={searchQuery}
+                                            onChange={e => setSearchQuery(e.target.value)}
                                         autoFocus
                                     />
                                 </div>
@@ -545,6 +610,8 @@ export default function TraspasosInternos() {
                                         <thead className="bg-white sticky top-0 shadow-sm z-10">
                                             <tr>
                                                 <th className="px-3 py-2 font-black text-[9px] uppercase text-gray-400">Producto / Lote</th>
+                                                <th className="px-3 py-2 font-black text-[9px] uppercase text-gray-400">Ubicación</th>
+                                                <th className="px-3 py-2 font-black text-[9px] uppercase text-gray-400">Vence</th>
                                                 <th className="px-3 py-2 font-black text-[9px] uppercase text-gray-400">Disp</th>
                                                 <th className="px-3 py-2 font-black text-[9px] uppercase text-gray-400 text-center">Añadir</th>
                                             </tr>
@@ -554,15 +621,22 @@ export default function TraspasosInternos() {
                                                 const stagedQty = stagingItems[batch.id] || 0;
                                                 const inCartQty = cartItems.find(i => i.batch.id === batch.id)?.transferQuantity || 0;
                                                 const inAssignedQty = assignedDestinations.filter(a => a.batch.id === batch.id).reduce((acc, curr) => acc + curr.transferQuantity, 0);
-                                                const maxAvail = batch.current_quantity - (inCartQty + inAssignedQty);
+                                                const maxAvail = getBatchAvailableQty(batch) - (inCartQty + inAssignedQty);
                                                 return (
                                                     <tr key={batch.id} className="hover:bg-orange-50/30 transition-colors">
                                                         <td className="px-3 py-2">
                                                             <div className="font-bold text-gray-800">{batch.product?.name}</div>
                                                             <div className="text-[9px] text-gray-500 uppercase flex gap-2 mt-0.5">
-                                                                <span>{batch.product?.sku}</span>
+                                                                <span>{batch.product?.sku || batch.product?.dci}</span>
                                                                 <span className="text-orange-600 font-mono">Lote: {batch.batch_number}</span>
                                                             </div>
+                                                        </td>
+                                                        <td className="px-3 py-2">
+                                                            <div className="text-[10px] font-bold text-gray-700 uppercase">{batch.location?.name}</div>
+                                                            <div className="text-[9px] text-gray-400 font-black uppercase">{batch.location?.location_type}</div>
+                                                        </td>
+                                                        <td className="px-3 py-2 text-[10px] font-bold text-gray-600">
+                                                            {batch.expiry_date ? new Date(`${batch.expiry_date}T00:00:00`).toLocaleDateString('es-CL') : 'S/V'}
                                                         </td>
                                                         <td className="px-3 py-2 text-[10px] font-bold text-gray-600">{maxAvail}</td>
                                                         <td className="px-3 py-2 text-center">

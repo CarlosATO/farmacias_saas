@@ -268,9 +268,11 @@ export default function Recetas() {
       'PENDING': 'bg-yellow-100 text-yellow-800',
       'PARTIAL': 'bg-blue-100 text-blue-800',
       'DISPENSED': 'bg-green-100 text-green-800',
+      'EXPIRED': 'bg-red-600 text-white font-black',
       'CANCELLED': 'bg-red-100 text-red-800'
     };
-    return <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${colors[status] || 'bg-slate-100'}`}>{status}</span>;
+    const label = status === 'EXPIRED' ? 'VENCIDA' : status;
+    return <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${colors[status] || 'bg-slate-100'}`}>{label}</span>;
   };
 
   if (view === 'create') {
@@ -597,8 +599,10 @@ export default function Recetas() {
                         <p className="text-gray-500 font-medium mt-1">Paciente: {detailPrescription.patient?.full_name}</p>
                     </div>
                     <div className="text-right text-xs space-y-1">
-                        <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Fecha:</span> <span className="font-mono">{new Date(detailPrescription.created_at).toLocaleDateString()}</span></p>
+                        <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Fecha Emisión:</span> <span className="font-mono">{detailPrescription.issued_at ? new Date(detailPrescription.issued_at).toLocaleDateString() : 'N/A'}</span></p>
+                        <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Válida Hasta:</span> <span className="font-mono text-red-600 font-bold">{detailPrescription.valid_until ? new Date(detailPrescription.valid_until).toLocaleDateString() : 'INDETERMINADO'}</span></p>
                         <p><span className="text-gray-400 font-bold uppercase tracking-widest mr-2">Médico:</span> <span>{detailPrescription.prescriber_name}</span></p>
+                        <p className="pt-2 text-[9px] text-gray-400 uppercase tracking-tighter">Registrada en sistema: {new Date(detailPrescription.created_at).toLocaleDateString()}</p>
                     </div>
                 </div>
 
@@ -685,7 +689,7 @@ export default function Recetas() {
               <tr key={p.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onClick={() => openDetail(p)}>
                 <td className="px-4 py-4">
                   <p className="font-bold text-[#4C3073]">{p.folio_electronico || p.folio || p.id.split('-')[0]}</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">{new Date(p.created_at).toLocaleDateString()}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Emisión: {p.issued_at ? new Date(p.issued_at).toLocaleDateString() : new Date(p.created_at).toLocaleDateString()}</p>
                 </td>
                 <td className="px-4 py-4">
                   <div className="flex items-center gap-2">
