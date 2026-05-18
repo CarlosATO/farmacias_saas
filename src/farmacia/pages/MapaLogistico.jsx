@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getPharmacySchema, getMyCompanyId } from '../api/pharmacyClient';
+import { getPharmacySchema, getMyCompanyId, createLocation, updateLocation, deactivateLocation } from '../api/pharmacyClient';
 import { 
     Warehouse, 
     MapPin, 
@@ -64,7 +64,7 @@ export default function MapaLogistico() {
             const [whRes, locRes, batchRes] = await Promise.all([
                 whQuery.order('name'),
                 (() => {
-                  let q = schema.from('locations').select('*').eq('company_id', companyId);
+                   let q = schema.from('locations').select('*').eq('company_id', companyId).eq('is_active', true);
                   if (activeWarehouse?.id) q = q.eq('warehouse_id', activeWarehouse.id);
                   return q.order('name');
                 })(),
@@ -100,10 +100,13 @@ export default function MapaLogistico() {
 
     const handleSaveEdit = async () => {
         if (!editingEntity || !editingEntity.name.trim()) return;
-        const schema = getPharmacySchema();
         
         try {
-            await schema.from('locations').update({ name: editingEntity.name }).eq('id', editingEntity.id);
+            const { error } = await updateLocation({
+                location_id: editingEntity.id,
+                name: editingEntity.name,
+            });
+            if (error) throw error;
             setEditingEntity(null);
             fetchData();
         } catch (error) {
@@ -118,16 +121,13 @@ export default function MapaLogistico() {
             return;
         }
         try {
-            const companyId = await getMyCompanyId();
-            const schema = getPharmacySchema();
-
-            await schema.from('locations').insert([{
-                company_id: companyId,
+            const { error } = await createLocation({
                 warehouse_id: warehouseId,
                 name: newLocation.name,
                 location_type: parentId ? locationType : newLocation.location_type,
-                parent_location_id: parentId
-            }]);
+                parent_location_id: parentId,
+            });
+            if (error) throw error;
             
             setNewLocation(null);
             fetchData();
@@ -138,46 +138,16 @@ export default function MapaLogistico() {
     };
 
     const handleDeleteLocation = async (location) => {
-        if (location.location_type === 'QUARANTINE') {
-            alert('La ubicación de Recepción (QUARANTINE) está protegida y no se puede borrar.');
-            return;
-        }
-
         const confirmDelete = window.confirm(`¿Está seguro de eliminar la ubicación ${location.name}?`);
         if (!confirmDelete) return;
 
-        const schema = getPharmacySchema();
-        
-        const { data: batches } = await schema.from('inventory_batches')
-            .select('id').eq('location_id', location.id).limit(1);
-            
-        const { data: moveFrom } = await schema.from('inventory_movements')
-            .select('id').eq('from_location_id', location.id).limit(1);
-            
-        const { data: moveTo } = await schema.from('inventory_movements')
-            .select('id').eq('to_location_id', location.id).limit(1);
-            
-        const { data: moveSource } = await schema.from('inventory_movements')
-            .select('id').eq('source_location_id', location.id).limit(1);
-            
-        const { data: moveDest } = await schema.from('inventory_movements')
-            .select('id').eq('destination_location_id', location.id).limit(1);
-
-        if ((batches && batches.length > 0) || 
-            (moveFrom && moveFrom.length > 0) || 
-            (moveTo && moveTo.length > 0) ||
-            (moveSource && moveSource.length > 0) ||
-            (moveDest && moveDest.length > 0)) {
-            alert('No se puede eliminar porque existen registros históricos o stock asociado a esta ubicación.');
-            return;
-        }
-
-        const { error } = await schema.from('locations').delete().eq('id', location.id);
-        if (error) {
+        try {
+            const { error } = await deactivateLocation(location.id);
+            if (error) throw error;
+            fetchData();
+        } catch (error) {
             console.error(error);
             alert('Error al eliminar la ubicación.');
-        } else {
-            fetchData();
         }
     };
 
@@ -247,6 +217,7 @@ export default function MapaLogistico() {
                                         const locConfig = LOCATION_ICONS[location.location_type] || LOCATION_ICONS['STORAGE'];
                                         const Icon = locConfig.icon;
                                         const count = batchCounts[location.id] || 0;
+                                        const isProtectedBase = ['SALES', 'STORAGE', 'QUARANTINE'].includes(location.location_type);
 
                                         return (
                                             <div key={location.id} className={`relative p-4 rounded-xl border-2 transition-all hover:shadow-md group flex flex-col ${locConfig.border} ${locConfig.bg}`}>
@@ -277,13 +248,15 @@ export default function MapaLogistico() {
                                                                 </div>
                                                             </div>
                                                             <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                <button 
-                                                                    onClick={() => setEditingEntity({ type: 'location', id: location.id, name: location.name })}
-                                                                    className="text-gray-400 hover:text-[#4C3073] p-1.5 hover:bg-white rounded-lg transition-all"
-                                                                >
-                                                                    <Edit2 size={14} />
-                                                                </button>
-                                                                {location.location_type !== 'QUARANTINE' && (
+                                                                {!isProtectedBase && (
+                                                                    <button 
+                                                                        onClick={() => setEditingEntity({ type: 'location', id: location.id, name: location.name })}
+                                                                        className="text-gray-400 hover:text-[#4C3073] p-1.5 hover:bg-white rounded-lg transition-all"
+                                                                    >
+                                                                        <Edit2 size={14} />
+                                                                    </button>
+                                                                )}
+                                                                {!isProtectedBase && (
                                                                     <button 
                                                                         onClick={() => handleDeleteLocation(location)}
                                                                         className="text-gray-400 hover:text-red-600 p-1.5 hover:bg-white rounded-lg transition-all"

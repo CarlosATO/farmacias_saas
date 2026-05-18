@@ -505,9 +505,29 @@ export const fetchLocations = async (warehouseId = null) => {
   const companyId = await getMyCompanyId();
   if (!companyId) return { data: null, error: new Error("No company id") };
 
-  let query = getPharmacySchema().from('locations').select('*, warehouse:warehouse_id(*)').eq('company_id', companyId);
+  let query = getPharmacySchema().from('locations').select('*, warehouse:warehouse_id(*)').eq('company_id', companyId).eq('is_active', true);
   if (warehouseId) query = query.eq('warehouse_id', warehouseId);
   return await query.order('name');
+};
+
+export const createLocation = async (payload) => {
+  const { data, error } = await getPharmacySchema().rpc('create_location', { p_payload: payload });
+  return { data, error };
+};
+
+export const createLocationsBulk = async (items) => {
+  const { data, error } = await getPharmacySchema().rpc('create_locations_bulk', { p_items: items });
+  return { data, error };
+};
+
+export const updateLocation = async (payload) => {
+  const { data, error } = await getPharmacySchema().rpc('update_location', { p_payload: payload });
+  return { data, error };
+};
+
+export const deactivateLocation = async (locationId) => {
+  const { data, error } = await getPharmacySchema().rpc('deactivate_location', { p_location_id: locationId });
+  return { data, error };
 };
 
 

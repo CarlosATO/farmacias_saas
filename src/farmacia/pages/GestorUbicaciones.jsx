@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getPharmacySchema, getMyCompanyId } from '../api/pharmacyClient';
+import { getPharmacySchema, getMyCompanyId, createLocation, createLocationsBulk, updateLocation, deactivateLocation } from '../api/pharmacyClient';
 import { ArrowLeft, Check, Plus, Trash2, Package, Edit2, X } from 'lucide-react';
 
 export default function GestorUbicaciones() {
@@ -52,11 +52,7 @@ export default function GestorUbicaciones() {
         return { shelvesData: shelves, specialZones: specials };
     }, [locations]);
 
-    useEffect(() => {
-        fetchData();
-    }, [locationId]);
-
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         try {
             setLoading(true);
             const companyId = await getMyCompanyId();
@@ -65,12 +61,12 @@ export default function GestorUbicaciones() {
             const schema = getPharmacySchema();
             
             // Get parent location
-            const { data: parentLoc, error: parentError } = await schema.from('locations').select('*').eq('id', locationId).single();
-            if (parentError) throw parentError;
-            setManagerParentLocation(parentLoc);
+             const { data: parentLoc, error: parentError } = await schema.from('locations').select('*').eq('id', locationId).eq('is_active', true).single();
+             if (parentError) throw parentError;
+             setManagerParentLocation(parentLoc);
 
             // Get child locations
-            const { data: childLocs } = await schema.from('locations').select('*').eq('parent_location_id', locationId).order('name');
+            const { data: childLocs } = await schema.from('locations').select('*').eq('parent_location_id', locationId).eq('is_active', true).order('name');
             setLocations(childLocs || []);
 
             // Get batches for these children
@@ -93,7 +89,11 @@ export default function GestorUbicaciones() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [locationId, navigate]);
+
+    useEffect(() => {
+        fetchData();
+    }, [fetchData]);
 
     const handleAddIndividual = async () => {
         if (!newLocationName.trim()) {
@@ -101,16 +101,13 @@ export default function GestorUbicaciones() {
             return;
         }
         try {
-            const companyId = await getMyCompanyId();
-            const schema = getPharmacySchema();
-
-            await schema.from('locations').insert([{
-                company_id: companyId,
+            const { error } = await createLocation({
                 warehouse_id: managerParentLocation.warehouse_id,
                 name: newLocationName,
                 location_type: managerParentLocation.location_type,
-                parent_location_id: managerParentLocation.id
-            }]);
+                parent_location_id: managerParentLocation.id,
+            });
+            if (error) throw error;
             
             setNewLocationName('');
             fetchData();
@@ -124,25 +121,13 @@ export default function GestorUbicaciones() {
         const confirmDelete = window.confirm(`¿Está seguro de eliminar la ubicación ${location.name}?`);
         if (!confirmDelete) return;
 
-        const schema = getPharmacySchema();
-        
-        const { data: batches } = await schema.from('inventory_batches').select('id').eq('location_id', location.id).limit(1);
-        const { data: moveFrom } = await schema.from('inventory_movements').select('id').eq('from_location_id', location.id).limit(1);
-        const { data: moveTo } = await schema.from('inventory_movements').select('id').eq('to_location_id', location.id).limit(1);
-        const { data: moveSource } = await schema.from('inventory_movements').select('id').eq('source_location_id', location.id).limit(1);
-        const { data: moveDest } = await schema.from('inventory_movements').select('id').eq('destination_location_id', location.id).limit(1);
-
-        if ((batches && batches.length > 0) || (moveFrom && moveFrom.length > 0) || (moveTo && moveTo.length > 0) || (moveSource && moveSource.length > 0) || (moveDest && moveDest.length > 0)) {
-            alert('No se puede eliminar porque existen registros históricos o stock asociado a esta ubicación.');
-            return;
-        }
-
-        const { error } = await schema.from('locations').delete().eq('id', location.id);
-        if (error) {
+        try {
+            const { error } = await deactivateLocation(location.id);
+            if (error) throw error;
+            fetchData();
+        } catch (error) {
             console.error(error);
             alert('Error al eliminar la ubicación.');
-        } else {
-            fetchData();
         }
     };
 
@@ -168,18 +153,14 @@ export default function GestorUbicaciones() {
         
         try {
             setIsSavingMassive(true);
-            const companyId = await getMyCompanyId();
-            const schema = getPharmacySchema();
-
             const insertData = massPreviews.map(name => ({
-                company_id: companyId,
                 warehouse_id: managerParentLocation.warehouse_id,
                 name: name,
                 location_type: managerParentLocation.location_type,
-                parent_location_id: managerParentLocation.id
+                parent_location_id: managerParentLocation.id,
             }));
 
-            const { error } = await schema.from('locations').insert(insertData);
+            const { error } = await createLocationsBulk(insertData);
             if (error) throw error;
 
             alert(`Se crearon ${massPreviews.length} ubicaciones exitosamente.`);
@@ -202,31 +183,12 @@ export default function GestorUbicaciones() {
 
         try {
             setLoading(true);
-            const schema = getPharmacySchema();
-            
-            // Get all locations with this prefix
-            const prefixLocations = [];
-            if (shelvesData[oldPrefix]) {
-                Object.values(shelvesData[oldPrefix]).forEach(col => {
-                    col.forEach(loc => prefixLocations.push(loc));
-                });
-            }
-
-            // Prepare updates
-            const updatePromises = prefixLocations.map(async (loc) => {
-                // Ensure we only replace the prefix at the start
-                const newName = loc.name.startsWith(oldPrefix) 
-                    ? trimmedNewPrefix + loc.name.substring(oldPrefix.length) 
-                    : loc.name;
-                
-                const { error } = await schema.from('locations').update({ name: newName }).eq('id', loc.id);
-                if (error) {
-                    console.error(`Error updating location ${loc.id} (${loc.name}):`, error);
-                    throw error;
-                }
+            const { error } = await updateLocation({
+                warehouse_id: managerParentLocation.warehouse_id,
+                prefix_from: oldPrefix,
+                prefix_to: trimmedNewPrefix,
             });
-
-            await Promise.all(updatePromises);
+            if (error) throw error;
             
             setEditingPrefix(null);
             setNewPrefixValue('');
