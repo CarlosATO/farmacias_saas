@@ -1,14 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, Banknote, Calculator, Loader2, ShieldAlert, Wallet, Calendar, FileText, Printer, ChevronRight, Search, CreditCard } from 'lucide-react';
 import { useSucursal } from '../context/SucursalContext';
 import {
   closePosSession,
   createCashMovement,
-  fetchClosedPosSessions,
   fetchPosOperators,
   fetchPosSessionSummary,
-  verifyPosOperatorPin,
   fetchPosTerminals,
   fetchSessionsByWarehouse,
   preOpenSession,
@@ -32,7 +29,6 @@ const initialClosingModal = {
 };
 
 export default function ControlCaja() {
-  const navigate = useNavigate();
   const { activeWarehouse } = useSucursal();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -45,7 +41,6 @@ export default function ControlCaja() {
   const [movementModal, setMovementModal] = useState(initialMovementModal);
   const [closingModal, setClosingModal] = useState(initialClosingModal);
   const [openingModal, setOpeningModal] = useState({ open: false, terminalId: null });
-  const [closedSessions, setClosedSessions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [sessionSales, setSessionSales] = useState([]);
   const [activeTab, setActiveTab] = useState('movements'); // 'movements' | 'sales'
@@ -63,33 +58,29 @@ export default function ControlCaja() {
   const [selectedSale, setSelectedSale] = useState(null);
 
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!activeWarehouse?.id) {
       setTerminals([]);
       setSessions([]);
-      setClosedSessions([]);
       setLoading(false);
       return;
     }
 
     setLoading(true);
     try {
-      const [termRes, sessRes, operRes, closedRes] = await Promise.all([
+      const [termRes, sessRes, operRes] = await Promise.all([
         fetchPosTerminals(activeWarehouse.id),
         fetchSessionsByWarehouse(activeWarehouse.id),
         fetchPosOperators(activeWarehouse.id),
-        fetchClosedPosSessions(activeWarehouse.id, 8)
       ]);
 
       if (termRes.error) throw termRes.error;
       if (sessRes.error) throw sessRes.error;
       if (operRes.error) throw operRes.error;
-      if (closedRes.error) throw closedRes.error;
 
       setTerminals(termRes.data || []);
       setSessions(sessRes.data || []);
       setOperators(operRes.data || []);
-      setClosedSessions(closedRes.data || []);
 
       // Si hay una sesión seleccionada, recargar su resumen y ventas
       if (selectedSessionId) {
@@ -112,9 +103,9 @@ export default function ControlCaja() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeWarehouse?.id, selectedSessionId]);
 
-  const fetchAuditData = async () => {
+  const fetchAuditData = useCallback(async () => {
     if (!activeWarehouse?.id) return;
     setLoading(true);
     try {
@@ -130,6 +121,34 @@ export default function ControlCaja() {
     } finally {
       setLoading(false);
     }
+  }, [activeWarehouse?.id, dateFilter.start, dateFilter.end]);
+
+  const handleOpenAuditSession = async (session) => {
+    if (!session?.session_id) return;
+    setLoading(true);
+    try {
+      const sessionForSummary = {
+        id: session.session_id,
+        opening_balance: session.initial_cash,
+      };
+      const { data: sessionSummary, error: summaryError } = await fetchPosSessionSummary(sessionForSummary);
+      if (summaryError) throw summaryError;
+      setSelectedAuditSession({
+        ...session,
+        id: session.session_id,
+        start_time: session.opened_at,
+        end_time: session.closed_at,
+        opening_balance: session.initial_cash,
+        closing_balance: session.counted_cash,
+        summary: sessionSummary,
+      });
+      setCurrentView('AUDIT_REPORT');
+    } catch (error) {
+      console.error('Error cargando auditoría de turno:', error);
+      alert(`No se pudo cargar la auditoría: ${error.message || error}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -138,7 +157,7 @@ export default function ControlCaja() {
     } else {
       loadData();
     }
-  }, [activeWarehouse?.id, selectedSessionId, activeMainTab]);
+  }, [activeMainTab, fetchAuditData, loadData]);
 
   const fmtCLP = (n) => `$${Number(n || 0).toLocaleString('es-CL')}`;
 
@@ -249,21 +268,11 @@ export default function ControlCaja() {
 
     setSubmitting(true);
     try {
-      const { data: pinValid, error: pinError } = await verifyPosOperatorPin({
-        operatorId: activeSession.operator.id,
-        warehouseId: activeWarehouse.id,
-        pinCode: closingModal.pinCode.trim(),
-      });
-      if (pinError) throw pinError;
-      if (!pinValid) {
-        alert('PIN de operador inválido. No se puede cerrar el turno.');
-        return;
-      }
-
       const { error } = await closePosSession({
         sessionId: activeSession.id,
-        closingBalance,
-        difference,
+        operatorId: activeSession.operator.id,
+        pinCode: closingModal.pinCode.trim(),
+        countedCash: closingBalance,
       });
       if (error) throw error;
 
@@ -702,9 +711,9 @@ export default function ControlCaja() {
                                 </td>
                                 <td className="px-8 py-6 text-center">
                                   <button 
-                                    onClick={() => { setSelectedAuditSession(session); setCurrentView('AUDIT_REPORT'); }}
-                                    className="inline-flex items-center gap-2 text-[10px] font-black uppercase text-[#4C3073] hover:underline"
-                                  >
+                                  onClick={() => handleOpenAuditSession(session)}
+                                  className="inline-flex items-center gap-2 text-[10px] font-black uppercase text-[#4C3073] hover:underline"
+                                >
                                     <FileText size={14} />
                                     Ver Auditoría
                                   </button>
@@ -1064,7 +1073,8 @@ export default function ControlCaja() {
   );
 }
 
-function MetricCard({ label, value, icon: Icon, accent }) {
+function MetricCard({ label, value, icon, accent }) {
+  const IconComponent = icon;
   return (
     <div className="bg-white border border-gray-200 rounded-2xl p-5">
       <div className="flex items-start justify-between gap-4">
@@ -1073,7 +1083,7 @@ function MetricCard({ label, value, icon: Icon, accent }) {
           <p className={`text-2xl font-black ${accent}`}>{value}</p>
         </div>
         <div className="w-11 h-11 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center shrink-0">
-          <Icon size={20} className="text-gray-400" />
+          <IconComponent size={20} className="text-gray-400" />
         </div>
       </div>
     </div>

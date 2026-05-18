@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { 
   Calendar, 
   ChevronLeft, 
@@ -8,13 +8,13 @@ import {
   Filter, 
   RefreshCcw, 
   Search, 
-  User, 
   X, 
   Download, 
   ShieldCheck, 
   Box, 
   ClipboardList,
-  Printer
+  Printer,
+  MonitorSmartphone
 } from 'lucide-react';
 import { 
   fetchAuditLogDetail, 
@@ -27,24 +27,34 @@ import {
 
 const PAGE_SIZE = 50;
 
+const maskSensitiveData = (obj) => {
+    if (!obj) return obj;
+    const sensitiveKeys = ['pin_hash', 'password', 'token', 'access_token', 'refresh_token', 'secret'];
+    
+    try {
+        const cloned = JSON.parse(JSON.stringify(obj));
+        const traverse = (o) => {
+            for (let i in o) {
+                if (o[i] !== null && typeof o[i] === 'object') {
+                    traverse(o[i]);
+                } else if (sensitiveKeys.includes(i)) {
+                    o[i] = '••••••';
+                }
+            }
+        };
+        traverse(cloned);
+        return cloned;
+    } catch {
+        return obj;
+    }
+};
+
 const formatDate = (value) => {
   if (!value) return '-';
   return new Intl.DateTimeFormat('es-CL', {
     dateStyle: 'short',
     timeStyle: 'medium',
   }).format(new Date(value));
-};
-
-const formatCLP = (value) => {
-  if (value === null || value === undefined || value === '') return 'Sin dato';
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) return String(value);
-
-  return new Intl.NumberFormat('es-CL', {
-    style: 'currency',
-    currency: 'CLP',
-    maximumFractionDigits: 0,
-  }).format(numericValue);
 };
 
 const formatDateOnly = (value) => {
@@ -88,11 +98,11 @@ export default function Auditoria() {
   const [filters, setFilters] = useState({ startDate: '', endDate: '', eventType: '', userId: '' });
   const [appliedFilters, setAppliedFilters] = useState({ startDate: '', endDate: '', eventType: '', userId: '' });
   
+  
   // Tab Lotes
   const [batchData, setBatchData] = useState([]);
   const [batchSearch, setBatchSearch] = useState('');
   const [uniqueLots, setUniqueLots] = useState([]); // List of possible lots for a batch number
-  const [selectedBatchId, setSelectedBatchId] = useState(null);
 
   // Tab Recetas
   const [prescriptionData, setPrescriptionData] = useState([]);
@@ -107,8 +117,9 @@ export default function Auditoria() {
   const [auditDetail, setAuditDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const loadGeneralLogs = async () => {
+  const loadGeneralLogs = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const { data, count: totalCount } = await fetchAuditLogs({
         ...appliedFilters,
@@ -122,9 +133,9 @@ export default function Auditoria() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedFilters, page]);
 
-  const loadBatchAudit = async (batchId = null) => {
+  const loadBatchAudit = useCallback(async (batchId = null) => {
     if (!batchSearch && !batchId) return;
     setLoading(true);
     setUniqueLots([]);
@@ -135,7 +146,6 @@ export default function Auditoria() {
         // Rastrear un ID específico
         const { data } = await fetchBatchAudit({ batch_id: batchId });
         setBatchData(data || []);
-        setSelectedBatchId(batchId);
       } else {
         // Buscar por número de lote primero para ver si hay duplicidad
         const { data: lots } = await fetchUniqueLotsByNumber(batchSearch.trim());
@@ -147,12 +157,10 @@ export default function Auditoria() {
           // Solo hay uno, cargar directamente
           const { data } = await fetchBatchAudit({ batch_id: lots[0].id });
           setBatchData(data || []);
-          setSelectedBatchId(lots[0].id);
         } else {
           // Hay varios, mostrar selector
           setUniqueLots(lots);
           setBatchData([]);
-          setSelectedBatchId(null);
         }
       }
     } catch (err) {
@@ -160,33 +168,63 @@ export default function Auditoria() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [batchSearch]);
 
-  const loadPrescriptionAudit = async () => {
+  const loadPrescriptionAudit = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const { data } = await fetchPrescriptionAudit(prescriptionFilters);
       setPrescriptionData(data || []);
     } finally {
       setLoading(false);
     }
-  };
+  }, [prescriptionFilters]);
 
-  const loadControlledAudit = async () => {
+  const loadControlledAudit = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const { data } = await fetchControlledAudit(controlledFilters);
       setControlledData(data || []);
     } finally {
       setLoading(false);
     }
-  };
+  }, [controlledFilters]);
 
   useEffect(() => {
     if (activeTab === 'GENERAL') loadGeneralLogs();
     if (activeTab === 'RECETAS') loadPrescriptionAudit();
     if (activeTab === 'CONTROLADOS') loadControlledAudit();
-  }, [activeTab, appliedFilters, page]);
+  }, [activeTab, loadControlledAudit, loadGeneralLogs, loadPrescriptionAudit]);
+
+  useEffect(() => {
+    if (!selectedLog?.id) {
+      setAuditDetail(null);
+      setDetailLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadDetail = async () => {
+      setDetailLoading(true);
+      try {
+        const { data } = await fetchAuditLogDetail(selectedLog.id);
+        if (!cancelled) setAuditDetail(data || null);
+      } catch {
+        if (!cancelled) setAuditDetail(null);
+      } finally {
+        if (!cancelled) setDetailLoading(false);
+      }
+    };
+
+    loadDetail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLog]);
 
   const exportToCSV = (data, filename) => {
     if (!data.length) return;
@@ -276,6 +314,12 @@ export default function Auditoria() {
                     <Download size={16} /> Excel
                 </button>
             </div>
+        )}
+
+        {error && (
+          <div className="mt-4 rounded-sm border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-700">
+            {error}
+          </div>
         )}
 
         {activeTab === 'LOTES' && (
@@ -590,42 +634,150 @@ export default function Auditoria() {
         </div>
       )}
 
-      {/* Log Detail Modal - Minimalistic */}
+      {/* Log Detail Drawer */}
       {selectedLog && (
-        <div className="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-8 backdrop-blur-sm print:hidden">
-            <div className="bg-white w-full max-w-2xl rounded-sm shadow-2xl flex flex-col max-h-[90vh]">
-                <div className="bg-[#4C3073] p-6 text-white flex justify-between items-center">
-                    <div>
-                        <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-70">Auditoría Técnica</p>
-                        <h2 className="text-xl font-black uppercase tracking-tight">{selectedLog.event_type}</h2>
-                    </div>
-                    <button onClick={() => setSelectedLog(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors"><X/></button>
+        <div 
+            className="fixed inset-0 bg-gray-900/20 backdrop-blur-sm z-[150] transition-opacity flex justify-end print:hidden"
+            onClick={() => setSelectedLog(null)}
+        >
+            <div 
+                className="w-full max-w-[600px] xl:max-w-[760px] bg-white h-full shadow-[-10px_0_30px_rgba(0,0,0,0.1)] flex flex-col animate-in slide-in-from-right duration-300"
+                onClick={e => e.stopPropagation()}
+                onKeyDown={e => e.key === 'Escape' && setSelectedLog(null)}
+                tabIndex={0}
+                ref={el => el && el.focus()}
+            >
+                <div className="absolute top-4 right-4 z-50">
+                    <button 
+                        onClick={() => setSelectedLog(null)}
+                        className="bg-gray-100 hover:bg-gray-200 text-gray-500 p-1.5 rounded-full transition-colors"
+                    >
+                        <X size={16} />
+                    </button>
                 </div>
-                <div className="p-8 overflow-auto space-y-6">
-                    <div>
-                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Descripción del Evento</label>
-                        <p className="text-sm font-bold text-gray-800 bg-gray-50 border border-gray-200 p-4 rounded-sm">{selectedLog.description}</p>
-                    </div>
-                    <div>
-                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Metadata del Sistema</label>
-                        <pre className="bg-gray-900 text-gray-300 p-4 rounded-sm text-[10px] font-mono overflow-auto max-h-60 leading-relaxed">
-                            {JSON.stringify(selectedLog.metadata, null, 2)}
-                        </pre>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="p-4 bg-gray-50 border border-gray-100 rounded-sm">
-                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Fecha Registro</label>
-                            <p className="text-xs font-black">{formatDate(selectedLog.created_at)}</p>
+
+                {(() => {
+                    const eventData = auditDetail?.audit_log || selectedLog;
+                    const metadata = eventData?.metadata;
+                    const maskedMetadata = maskSensitiveData(metadata);
+
+                    return (
+                        <div className="flex flex-col h-full bg-gray-50">
+                            {/* Header */}
+                            <div className="bg-white border-b border-gray-200 px-6 py-5 shrink-0 shadow-sm relative overflow-hidden">
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-[#4C3073]/5 rounded-bl-full -z-0"></div>
+                                <div className="relative z-10 pr-8">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <ShieldCheck size={20} className="text-[#4C3073]" />
+                                        <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Detalle de Auditoría</h2>
+                                    </div>
+                                    <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                                        <span>ID: {eventData?.id?.split('-')[0] || 'S/D'}</span>
+                                        <span>•</span>
+                                        <span className="bg-purple-100 text-[#4C3073] px-1.5 py-0.5 rounded-sm">{eventData?.event_type || 'DESCONOCIDO'}</span>
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                                {detailLoading ? (
+                                    <div className="flex flex-col items-center justify-center py-24 text-gray-400 gap-4">
+                                        <RefreshCcw size={32} className="animate-spin text-[#4C3073]" />
+                                        <p className="text-[10px] font-black uppercase tracking-widest">Cargando contexto operacional...</p>
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* SECCION A: RESUMEN DEL EVENTO */}
+                                        <div className="bg-white border border-gray-200 rounded-sm shadow-sm overflow-hidden">
+                                            <div className="border-b border-gray-100 px-5 py-3 bg-gray-50/50 flex items-center gap-2">
+                                                <FileText size={14} className="text-[#4C3073]" />
+                                                <h4 className="text-[10px] font-black text-[#4C3073] uppercase tracking-widest">Resumen del Evento</h4>
+                                            </div>
+                                            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div className="col-span-full">
+                                                    <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Descripción</label>
+                                                    <p className="text-[13px] font-bold text-gray-800">{eventData?.description || 'Sin descripción'}</p>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Fecha / Hora</label>
+                                                    <p className="text-[11px] font-black text-gray-700">{formatDate(eventData?.created_at)}</p>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Actor / Usuario</label>
+                                                    <p className="text-[11px] font-black text-gray-700">{eventData?.user_name || 'Usuario no identificado'}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* SECCION B: CONTEXTO OPERACIONAL */}
+                                        <div className="bg-white border border-gray-200 rounded-sm shadow-sm overflow-hidden">
+                                            <div className="border-b border-gray-100 px-5 py-3 bg-gray-50/50 flex items-center gap-2">
+                                                <Box size={14} className="text-[#4C3073]" />
+                                                <h4 className="text-[10px] font-black text-[#4C3073] uppercase tracking-widest">Contexto Operacional</h4>
+                                            </div>
+                                            <div className="p-5">
+                                                {(!metadata || Object.keys(metadata).length === 0) && !auditDetail?.batch && (
+                                                    <p className="text-[11px] font-bold text-gray-400 italic">Sin contexto operacional específico para este evento.</p>
+                                                )}
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                    {metadata?.warehouse_name && (
+                                                        <div>
+                                                            <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Sucursal / Local</label>
+                                                            <p className="text-[11px] font-black text-gray-700">{metadata.warehouse_name}</p>
+                                                        </div>
+                                                    )}
+                                                    {metadata?.pos_operator && (
+                                                        <div>
+                                                            <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Operador POS</label>
+                                                            <p className="text-[11px] font-black text-gray-700">{metadata.pos_operator}</p>
+                                                        </div>
+                                                    )}
+                                                    {auditDetail?.batch && (
+                                                        <div className="col-span-full p-3 bg-blue-50 border border-blue-100 rounded-sm">
+                                                            <label className="block text-[9px] font-black text-blue-400 uppercase tracking-widest mb-1">Lote / Producto Vinculado</label>
+                                                            <p className="text-[11px] font-black text-blue-800 uppercase">{auditDetail.batch.product_name} - {auditDetail.batch.batch_number}</p>
+                                                        </div>
+                                                    )}
+                                                    {metadata?.sale_id && (
+                                                        <div>
+                                                            <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Venta / Transacción</label>
+                                                            <p className="text-[11px] font-black text-gray-700 font-mono">ID: {metadata.sale_id}</p>
+                                                        </div>
+                                                    )}
+                                                    {metadata?.status && (
+                                                        <div>
+                                                            <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Resultado / Estado</label>
+                                                            <p className="text-[11px] font-black text-gray-700">{metadata.status}</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* SECCION C: METADATA TECNICA */}
+                                        <div className="bg-white border border-gray-200 rounded-sm shadow-sm overflow-hidden">
+                                            <div className="border-b border-gray-100 px-5 py-3 bg-gray-50/50 flex items-center gap-2">
+                                                <MonitorSmartphone size={14} className="text-[#4C3073]" />
+                                                <h4 className="text-[10px] font-black text-[#4C3073] uppercase tracking-widest">Metadata Técnica (JSON)</h4>
+                                            </div>
+                                            <div className="p-0 bg-gray-900 border-t border-gray-800">
+                                                {maskedMetadata && Object.keys(maskedMetadata).length > 0 ? (
+                                                    <pre className="p-5 text-emerald-400 text-[10px] font-mono overflow-x-auto max-h-[300px] leading-relaxed">
+                                                        {JSON.stringify(maskedMetadata, null, 2)}
+                                                    </pre>
+                                                ) : (
+                                                    <div className="p-8 text-center">
+                                                        <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Sin metadata técnica adicional</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
                         </div>
-                        <div className="p-4 bg-gray-50 border border-gray-100 rounded-sm">
-                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Usuario</label>
-                            <p className="text-xs font-black">{selectedLog.user_name || 'Sistema'}</p>
-                        </div>
-                    </div>
-                </div>
-                <div className="p-6 border-t border-gray-100 bg-gray-50/50 flex justify-end">
-                    <button onClick={() => setSelectedLog(null)} className="bg-gray-800 text-white px-8 py-2 rounded-sm text-xs font-black uppercase tracking-widest">Cerrar</button>
-                </div>
+                    );
+                })()}
             </div>
         </div>
       )}

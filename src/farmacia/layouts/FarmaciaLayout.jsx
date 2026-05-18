@@ -33,16 +33,17 @@ const RIBBON_TABS = [
     match: ['/'],
     exact: true,
     items: [
-      { to: '/', label: 'Dashboard', icon: LayoutDashboard, match: ['/'], exact: true },
+      { to: '/', label: 'Gerencial', icon: LayoutDashboard, match: ['/'], exact: true },
     ],
   },
   {
     id: 'inventario',
     label: 'Inventario',
     type: 'group',
-    match: ['/inventario', '/administracion/medicamentos', '/mapa-lotes', '/kardex', '/traspasos', '/recepcion-traspasos'],
+    match: ['/inventario', '/reposicion-inteligente', '/administracion/medicamentos', '/mapa-lotes', '/kardex', '/traspasos', '/recepcion-traspasos'],
     items: [
       { to: '/inventario', label: 'Inventario', icon: Package, match: ['/inventario'] },
+      { to: '/reposicion-inteligente', label: 'Reposición', icon: ShoppingCart, match: ['/reposicion-inteligente'] },
       { to: '/administracion/medicamentos', label: 'Catalogo', icon: Pill, match: ['/administracion/medicamentos'] },
       { to: '/mapa-lotes', label: 'Mapa de Lotes', icon: Warehouse, match: ['/mapa-lotes'] },
       { to: '/kardex', label: 'Kardex', icon: Receipt, match: ['/kardex'] },

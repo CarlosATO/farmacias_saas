@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   FileText, 
   Search, 
@@ -18,6 +18,7 @@ import {
   Hash
 } from 'lucide-react';
 import { fetchDteDocuments, fetchSaleItems } from '../api/pharmacyClient';
+import { matchesDocumentSearch, getDocumentSearchLabel } from '../utils/documents/documentSearch';
 
 const formatDate = (value) => {
   if (!value) return '-';
@@ -69,12 +70,15 @@ export default function DocumentosTributarios() {
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [docItems, setDocItems] = useState([]);
   const [loadingItems, setLoadingItems] = useState(false);
-  const printRef = useRef();
+  const visibleDocuments = useMemo(() => documents.filter((doc) => matchesDocumentSearch(doc, filters.folio)), [documents, filters.folio]);
 
   const loadDocuments = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await fetchDteDocuments(filters);
+      const { data } = await fetchDteDocuments({
+        ...filters,
+        folio: /^\d+$/.test(String(filters.folio || '').trim()) ? filters.folio : '',
+      });
       setDocuments(data || []);
     } catch (error) {
       console.error("Error cargando DTEs:", error);
@@ -165,12 +169,12 @@ export default function DocumentosTributarios() {
       {/* Filters - Hidden on Print */}
       <div className="px-6 py-4 bg-white border-b border-gray-200 flex flex-wrap gap-4 items-end shrink-0 print:hidden">
         <div className="flex-1 min-w-[200px]">
-          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Folio</label>
+            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{getDocumentSearchLabel()}</label>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input 
               type="text" 
-              placeholder="Buscar folio..." 
+                placeholder="Buscar por N°11, BOL-667254 o 667254" 
               value={filters.folio}
               onChange={e => setFilters({...filters, folio: e.target.value})}
               className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-sm text-xs font-bold outline-none focus:border-[#4C3073]"
@@ -229,7 +233,7 @@ export default function DocumentosTributarios() {
             <table className="w-full text-left border-collapse">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-4 font-black text-gray-500 uppercase tracking-widest text-[10px]">Folio</th>
+                  <th className="px-6 py-4 font-black text-gray-500 uppercase tracking-widest text-[10px]">Documento interno</th>
                   <th className="px-6 py-4 font-black text-gray-500 uppercase tracking-widest text-[10px]">Tipo</th>
                   <th className="px-6 py-4 font-black text-gray-500 uppercase tracking-widest text-[10px]">Cliente</th>
                   <th className="px-6 py-4 font-black text-gray-500 uppercase tracking-widest text-[10px]">Estado</th>
@@ -239,10 +243,11 @@ export default function DocumentosTributarios() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {documents.map((doc) => (
+                {visibleDocuments.map((doc) => (
                   <tr key={doc.id} className="hover:bg-gray-50 transition-colors group">
                     <td className="px-6 py-4">
                       <span className="font-black text-gray-900 text-sm">#{doc.folio}</span>
+                      <p className="text-[10px] text-gray-400 font-mono mt-0.5">Ref POS: {doc.sale?.document_number || 'N/A'}</p>
                     </td>
                     <td className="px-6 py-4">
                       <span className="font-bold text-gray-600 text-xs">{doc.dte_type}</span>
@@ -324,8 +329,8 @@ export default function DocumentosTributarios() {
               {/* Header Print View */}
               <div className="mb-8 flex justify-between items-start border-b-2 border-[#4C3073] pb-6">
                 <div>
-                  <h3 className="text-3xl font-black text-[#4C3073] uppercase tracking-tighter mb-1">BOLETA ELECTRÓNICA</h3>
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">DOCUMENTO INTERNO SIMULADO</p>
+                <h3 className="text-3xl font-black text-[#4C3073] uppercase tracking-tighter mb-1">DOCUMENTO INTERNO DE VENTA</h3>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">BOLETA INTERNA SIMULADA</p>
                   <div className="mt-4 space-y-1">
                     <p className="text-sm font-black uppercase tracking-wider">{selectedDoc.patient?.full_name || 'CLIENTE GENERAL'}</p>
                     <p className="text-xs text-gray-500 font-mono">{selectedDoc.patient?.rut || 'RUT NO REGISTRADO'}</p>
@@ -354,7 +359,7 @@ export default function DocumentosTributarios() {
                   <div className="flex items-start gap-3">
                     <ShoppingBag size={16} className="text-gray-400 mt-1" />
                     <div>
-                      <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Folio de Venta Asociado</p>
+                      <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Referencia POS</p>
                       <p className="text-xs font-bold text-gray-700">{selectedDoc.sale?.document_number || 'N/A'}</p>
                     </div>
                   </div>

@@ -102,10 +102,10 @@ export function buildDteHtml(dteDoc, saleItems = []) {
     </div>
   </div>
 
-  <div class="info-grid">
-    <div class="info-block"><label>Fecha de Emisión</label><p>${issuedAt}</p></div>
-    <div class="info-block"><label>Folio de Venta POS</label><p>${saleDocNumber}</p></div>
-  </div>
+    <div class="info-grid">
+     <div class="info-block"><label>Fecha de Emisión</label><p>${issuedAt}</p></div>
+     <div class="info-block"><label>Referencia POS</label><p>${saleDocNumber}</p></div>
+   </div>
 
   <table>
     <thead><tr><th>Producto</th><th>Cant.</th><th>P. Unitario</th><th>Subtotal</th></tr></thead>

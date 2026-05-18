@@ -3,7 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './api/supabaseClient';
 
 const FarmaciaLayout = lazy(() => import('./farmacia/layouts/FarmaciaLayout'));
-const FarmaciaDashboard = lazy(() => import('./farmacia/pages/FarmaciaDashboard'));
+const DashboardGerencial = lazy(() => import('./farmacia/pages/DashboardGerencial'));
+const ReposicionInteligente = lazy(() => import('./farmacia/pages/ReposicionInteligente'));
 const InventarioMedico = lazy(() => import('./farmacia/pages/InventarioMedico'));
 const Recetas = lazy(() => import('./farmacia/pages/Recetas'));
 const Pacientes = lazy(() => import('./farmacia/pages/Pacientes'));
@@ -92,8 +93,9 @@ export default function App() {
       <SucursalProvider>
         <Routes>
           <Route path="/" element={<PrivateRoute><Suspense fallback={<PageLoader />}><FarmaciaLayout /></Suspense></PrivateRoute>}>
-            <Route index element={<Suspense fallback={<PageLoader />}><FarmaciaDashboard /></Suspense>} />
+            <Route index element={<Suspense fallback={<PageLoader />}><DashboardGerencial /></Suspense>} />
             <Route path="inventario" element={<Suspense fallback={<PageLoader />}><InventarioMedico /></Suspense>} />
+            <Route path="reposicion-inteligente" element={<Suspense fallback={<PageLoader />}><ReposicionInteligente /></Suspense>} />
             <Route path="recetas" element={<Suspense fallback={<PageLoader />}><Recetas /></Suspense>} />
             <Route path="pacientes" element={<Suspense fallback={<PageLoader />}><Pacientes /></Suspense>} />
             <Route path="medicos" element={<Suspense fallback={<PageLoader />}><Medicos /></Suspense>} />

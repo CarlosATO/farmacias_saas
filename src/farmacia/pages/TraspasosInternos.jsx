@@ -57,6 +57,13 @@ export default function TraspasosInternos() {
     const [dropHoveredId, setDropHoveredId] = useState(null);
     const [dropModal, setDropModal] = useState({ open: false, items: [], targetId: '' });
 
+    const sourceZone = useMemo(
+        () => locations.find((l) => l.id === transferData.source_zone_id) || null,
+        [locations, transferData.source_zone_id],
+    );
+    const sourceZoneType = String(sourceZone?.location_type || '').toUpperCase();
+    const isQuarantineSource = sourceZoneType === 'QUARANTINE';
+
     useEffect(() => {
         fetchData();
     }, []);
@@ -357,7 +364,11 @@ export default function TraspasosInternos() {
         if (isInterSucursal) {
             destZones = locations.filter(l => l.warehouse_id === transferData.dest_warehouse_id && l.location_type === 'QUARANTINE' && !l.parent_location_id);
         } else {
-            destZones = locations.filter(l => l.warehouse_id === transferData.dest_warehouse_id && !l.parent_location_id && (quickTransfer?.mode === 'MOVE_TO_QUARANTINE' ? true : l.location_type !== 'QUARANTINE'));
+            destZones = locations.filter(l => {
+                if (l.warehouse_id !== transferData.dest_warehouse_id || l.parent_location_id) return false;
+                if (isQuarantineSource) return ['STORAGE', 'SALES'].includes(String(l.location_type || '').toUpperCase());
+                return quickTransfer?.mode === 'MOVE_TO_QUARANTINE' ? true : l.location_type !== 'QUARANTINE';
+            });
         }
     }
     const destSpecifics = locations.filter(l => l.parent_location_id === transferData.dest_zone_id);
@@ -425,7 +436,7 @@ export default function TraspasosInternos() {
                     <div className="flex items-center justify-between gap-4">
                         <div>
                             <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">Acción rápida</p>
-                            <p className="font-black uppercase">{quickBanner.mode === 'MOVE_TO_QUARANTINE' ? 'Mover a cuarentena' : 'Transferir stock'}</p>
+                            <p className="font-black uppercase">{quickBanner.mode === 'MOVE_TO_QUARANTINE' ? 'Mover a cuarentena' : isQuarantineSource ? 'Liberar desde cuarentena' : 'Transferir stock'}</p>
                             <p className="text-xs font-bold mt-1">Producto: {quickBanner.product_name} {quickBanner.batch_number ? `| Lote: ${quickBanner.batch_number}` : ''}</p>
                         </div>
                         <button onClick={() => setQuickBanner(null)} className="text-amber-500 hover:text-amber-700 font-black text-lg leading-none">×</button>
@@ -526,7 +537,7 @@ export default function TraspasosInternos() {
                         </div>
                     </div>
                 </div>
-                {workflowStep === 'PUTAWAY' && totalLotesCount > 0 && (
+                        {workflowStep === 'PUTAWAY' && totalLotesCount > 0 && (
                     <button 
                         onClick={handleConfirmTransfer}
                         disabled={isTransferring}
@@ -539,7 +550,7 @@ export default function TraspasosInternos() {
                         ) : (
                             <CheckCircle2 className="h-4 w-4" />
                         )}
-                        {isInterSucursal ? 'Generar Reserva de Envío' : 'Ejecutar Acomodo Inmediato'}
+                        {isInterSucursal ? 'Generar Reserva de Envío' : isQuarantineSource ? 'Liberar desde cuarentena' : 'Ejecutar Acomodo Inmediato'}
                     </button>
                 )}
             </div>
@@ -766,17 +777,17 @@ export default function TraspasosInternos() {
                                     </select>
                                 </div>
                                 <div className="flex flex-col gap-1">
-                                    <label className="text-[8px] font-black text-gray-400 uppercase">Bodega / Área</label>
-                                    <select 
-                                        className="border-b border-gray-200 bg-gray-50 px-2 py-1.5 text-xs font-bold text-gray-700 outline-none focus:border-blue-400 disabled:opacity-50"
-                                        value={transferData.dest_zone_id}
-                                        onChange={e => setTransferData({...transferData, dest_zone_id: e.target.value, dest_location_id: ''})}
-                                        disabled={!transferData.dest_warehouse_id || isInterSucursal}
-                                    >
-                                        <option value="">Seleccione Área...</option>
-                                        {destZones.map(l => <option key={l.id} value={l.id}>{l.name} ({l.location_type})</option>)}
-                                    </select>
-                                </div>
+                                <label className="text-[8px] font-black text-gray-400 uppercase">Bodega / Área</label>
+                                <select 
+                                    className="border-b border-gray-200 bg-gray-50 px-2 py-1.5 text-xs font-bold text-gray-700 outline-none focus:border-blue-400 disabled:opacity-50"
+                                    value={transferData.dest_zone_id}
+                                    onChange={e => setTransferData({...transferData, dest_zone_id: e.target.value, dest_location_id: ''})}
+                                    disabled={!transferData.dest_warehouse_id || isInterSucursal}
+                                >
+                                    <option value="">Seleccione Área...</option>
+                                    {destZones.map(l => <option key={l.id} value={l.id}>{l.name} ({l.location_type})</option>)}
+                                </select>
+                            </div>
                             </div>
                             {isInterSucursal && (
                                 <p className="text-[9px] text-blue-700 bg-blue-50 p-2 rounded border border-blue-100 font-medium leading-tight">

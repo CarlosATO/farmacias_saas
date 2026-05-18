@@ -1,0 +1,817 @@
+Filosofía Profesional de Construcción de Software (Carlos Alegria)
+Guía Maestra para Sistemas Escalables, Auditables y Mantenibles
+
+
+Documento base para desarrollo personal, SaaS, ERP, WMS, POS y sistemas operacionales.
+Aplicable incluso a sistemas pequeños o monousuario.
+
+1. PRINCIPIO FUNDAMENTAL
+El objetivo NO es “hacer que funcione”
+
+El verdadero objetivo es:
+
+Construir software:
+- consistente,
+- mantenible,
+- escalable,
+- auditable,
+- seguro,
+- comprensible,
+- y resistente a errores humanos y técnicos.
+
+Un sistema que “funciona” hoy pero:
+
+es difícil de mantener,
+rompe otras partes,
+duplica lógica,
+pierde trazabilidad,
+o genera inconsistencias,
+
+NO está bien construido.
+
+2. LA REGLA MÁS IMPORTANTE
+EL FRONTEND NUNCA DEBE SER LA FUENTE DE VERDAD
+
+El frontend:
+
+muestra,
+guía,
+ayuda,
+valida UX,
+consume APIs.
+
+Pero:
+
+El backend decide.
+La base de datos protege.
+Las transacciones garantizan consistencia.
+3. LO QUE NUNCA DEBES HACER
+❌ ERROR #1 — Lógica crítica en frontend
+Nunca hacer esto:
+// React insertando stock directamente
+await supabase.from("inventory_batches").insert(...)
+
+await supabase.from("inventory_movements").insert(...)
+
+await supabase.from("products").update(...)
+Riesgo
+
+Si falla una línea:
+
+el stock queda corrupto,
+el kardex incompleto,
+la auditoría rota.
+Correcto
+Frontend
+→ llama RPC/backend
+→ backend ejecuta TODO transaccionalmente
+→ commit o rollback único
+❌ ERROR #2 — Validar solo en frontend
+Nunca confiar en:
+if (cantidad <= stockDisponible)
+Riesgo
+
+Otro usuario puede cambiar el stock al mismo tiempo.
+
+Correcto
+Frontend valida UX.
+Backend valida verdad.
+❌ ERROR #3 — Páginas gigantes
+Nunca crear:
+Archivo de 1.500 líneas:
+- listado
+- detalle
+- edición
+- modales
+- lógica
+- cálculos
+- API calls
+Riesgo
+bugs invisibles,
+render roto,
+estados mezclados,
+mantenimiento imposible.
+Correcto
+
+Separar:
+
+Page
+→ Components
+→ Hooks
+→ Services
+→ Utilities
+❌ ERROR #4 — Duplicar lógica
+Nunca hacer:
+Frontend:
+- calcula stock
+
+Backend:
+- calcula stock
+Riesgo
+
+Un cálculo cambia y el otro no.
+
+Correcto
+Una sola fuente de verdad.
+❌ ERROR #5 — Estados improvisados
+Nunca usar estados sin catálogo formal
+
+Ejemplo malo:
+
+"pendiente"
+"PEND"
+"emitida"
+"EMITIDA"
+"pending"
+Riesgo
+botones incorrectos,
+flujos rotos,
+validaciones inconsistentes.
+Correcto
+
+Definir:
+
+Estado DB:
+- DRAFT
+- PENDING
+- PARTIAL
+- RECEIVED
+- CANCELLED
+
+Etiqueta UI:
+- Borrador
+- Emitida
+- Parcial
+- Recibida
+- Anulada
+❌ ERROR #6 — No pensar concurrencia
+Nunca asumir:
+“solo habrá un usuario”
+Riesgo
+
+Dos acciones simultáneas:
+
+doble descuento,
+doble recepción,
+stock negativo.
+Correcto
+
+Usar:
+
+SELECT ... FOR UPDATE
+
+y validaciones transaccionales.
+
+❌ ERROR #7 — No usar transacciones
+Nunca hacer operaciones críticas separadas
+
+Ejemplo malo:
+
+1. crear recepción
+2. crear lote
+3. crear movimiento
+4. actualizar stock
+
+sin transacción.
+
+Riesgo
+
+Falla parcial.
+
+Correcto
+BEGIN
+→ todo
+COMMIT
+
+o
+
+ROLLBACK
+❌ ERROR #8 — Constraints débiles
+Nunca depender solo del código
+Correcto
+
+La DB debe proteger:
+
+CHECK
+UNIQUE
+FOREIGN KEY
+NOT NULL
+❌ ERROR #9 — Borrar datos críticos
+Nunca hacer:
+DELETE FROM purchase_orders
+Correcto
+
+Soft delete o estados:
+
+CANCELLED
+VOID
+INACTIVE
+❌ ERROR #10 — Mezclar unidades operacionales
+Especialmente en farmacia/logística
+
+Nunca asumir:
+
+compra == venta
+Correcto
+
+Separar:
+
+purchase_uom
+sale_uom
+conversion_factor
+4. PRINCIPIOS OBLIGATORIOS
+✅ PRINCIPIO #1 — Backend manda
+
+Toda lógica crítica:
+
+inventario,
+dinero,
+recetas,
+auditoría,
+permisos,
+recepción,
+transferencias,
+
+debe vivir en backend.
+
+✅ PRINCIPIO #2 — Una operación crítica = una transacción
+
+Ejemplo:
+
+Recepción OC
+
+debe:
+
+crear recepción,
+lotes,
+movimientos,
+actualizar OC,
+actualizar stock,
+
+TODO en una sola transacción.
+
+✅ PRINCIPIO #3 — Pensar estados antes de programar
+
+Antes de construir:
+
+¿Qué estados existen?
+¿Cómo cambia entre ellos?
+¿Qué operaciones bloquea?
+✅ PRINCIPIO #4 — Pensar flujo completo
+
+Antes de crear módulo:
+
+Entrada
+→ proceso
+→ validaciones
+→ auditoría
+→ salida
+→ excepciones
+→ reversa
+✅ PRINCIPIO #5 — Auditoría obligatoria
+
+Toda operación crítica debe registrar:
+
+quién
+qué
+cuándo
+desde dónde
+por qué
+✅ PRINCIPIO #6 — Nunca confiar en UI
+
+La UI:
+
+puede fallar,
+manipularse,
+quedar vieja.
+
+La DB debe defenderse sola.
+
+✅ PRINCIPIO #7 — Evitar doble verdad
+
+Ejemplo peligroso:
+
+products.stock_quantity
++
+inventory_batches
+Regla
+
+Definir cuál es:
+
+verdad,
+cache,
+derivado.
+✅ PRINCIPIO #8 — Las migraciones NO se editan
+
+Una migración aplicada:
+
+NO se modifica.
+
+Siempre:
+
+nueva migración incremental
+✅ PRINCIPIO #9 — Nombrado consistente
+Siempre usar:
+snake_case DB
+PascalCase React components
+camelCase JS variables
+✅ PRINCIPIO #10 — El código debe explicar intención
+
+Mal:
+
+x = y * z
+
+Bien:
+
+purchaseQuantity = saleUnits / conversionFactor
+5. CHECKLIST OBLIGATORIO ANTES DE CREAR UN MÓDULO
+Arquitectura
+[ ] Qué entidad maneja
+[ ] Qué estados tiene
+[ ] Qué operaciones críticas existen
+[ ] Qué debe ir en backend
+[ ] Qué puede vivir en frontend
+Seguridad y consistencia
+[ ] Qué pasa si falla a mitad
+[ ] Qué pasa si dos usuarios ejecutan al mismo tiempo
+[ ] Qué constraints necesita
+[ ] Qué validaciones requiere
+Auditoría
+[ ] Qué debe quedar trazado
+[ ] Qué usuario ejecutó
+[ ] Qué timestamp
+[ ] Qué motivo
+Operación
+[ ] Cómo se revierte
+[ ] Cómo se anula
+[ ] Cómo se corrige
+[ ] Cómo se audita
+Escalabilidad
+[ ] Puede crecer?
+[ ] Está duplicando lógica?
+[ ] Hay demasiada responsabilidad en un componente?
+6. FILOSOFÍA DE CONSTRUCCIÓN MODERNA
+MVP NO significa código desechable
+
+MVP significa:
+
+mínimo producto útil,
+NO mínimo estándar técnico.
+La velocidad sin arquitectura genera deuda
+
+La deuda técnica:
+
+no explota hoy,
+explota cuando el sistema crece.
+El objetivo es reducir complejidad accidental
+
+La complejidad del negocio ya existe.
+
+No agregues complejidad innecesaria:
+
+lógica duplicada,
+estados ambiguos,
+páginas gigantes,
+operaciones parciales.
+7. REGLAS ESPECIALES PARA ERP / FARMACIA / WMS
+Inventario
+Toda modificación de stock debe ser transaccional.
+Lotes
+Nunca perder:
+- batch_number
+- expiry_date
+- trazabilidad origen
+Compras
+Compra y venta NO son la misma unidad.
+Recepción
+Recepción ≠ stock disponible automáticamente.
+
+Usar:
+
+QUARANTINE
+QA
+liberación.
+POS
+El POS jamás debe vender stock inexistente.
+Auditoría
+Toda operación financiera o inventario debe poder reconstruirse históricamente.
+8. FILOSOFÍA FINAL
+Antes pensabas:
+“¿Cómo hago que funcione?”
+Ahora debes pensar:
+“¿Cómo hago que:
+- funcione,
+- sea consistente,
+- sobreviva errores,
+- escale,
+- sea mantenible,
+- y no rompa el sistema en 6 meses?”
+9. REGLA MAESTRA
+Si una operación afecta:
+dinero,
+stock,
+recetas,
+auditoría,
+permisos,
+estados operacionales,
+
+entonces:
+
+NO pertenece al frontend.
+Pertenece a una transacción backend auditada.
+10. FILOSOFÍA DEFINITIVA DE CONSTRUCCIÓN
+El software profesional no se mide por “funciona”.
+
+Se mide por:
+- consistencia,
+- resiliencia,
+- claridad,
+- trazabilidad,
+- mantenibilidad,
+- y capacidad de evolucionar sin destruirse.
+
+11. REGLA PARA BACKEND: SUPABASE O PYTHON
+11.1. Si el backend es Supabase
+
+Nunca crear lógica crítica directamente “a mano” en el dashboard de Supabase sin dejarla versionada en el proyecto.
+
+❌ Prohibido
+Crear funciones, vistas, triggers, constraints o columnas directamente en Supabase
+sin crear una migración en el repositorio.
+Riesgo
+el local queda distinto al remoto;
+otro agente no sabe qué existe;
+no se puede reproducir el sistema;
+se rompe el historial;
+no hay control de cambios;
+no se puede volver atrás.
+Regla obligatoria
+
+Todo cambio SQL debe vivir en:
+
+supabase/migrations/
+
+Ejemplo:
+
+supabase/migrations/20260514120000_normalize_inventory_movement_types.sql
+Qué debe ir en migraciones
+- tablas
+- columnas
+- constraints
+- indexes
+- views
+- RPC/functions
+- triggers
+- políticas RLS
+- cambios de enums/checks
+Regla de oro
+Si no está en una migración, no existe oficialmente.
+Scripts auxiliares
+
+Los scripts de prueba o limpieza NO deben mezclarse con migraciones productivas.
+
+Deben ir en:
+
+supabase/sql/
+
+Ejemplo:
+
+supabase/sql/test_bioequivalent_engine_seed.sql
+supabase/sql/test_bioequivalent_engine_cleanup.sql
+Diferencia
+supabase/migrations/
+= cambios estructurales oficiales del sistema
+
+supabase/sql/
+= scripts manuales, pruebas, seeds temporales, limpieza
+Reglas para scripts SQL
+- deben tener nombre claro;
+- deben indicar si son prueba, seed o cleanup;
+- no deben ejecutarse automáticamente;
+- no deben modificar estructura productiva salvo que sean migración;
+- deben poder eliminarse o repetirse sin romper datos.
+Nunca hacer
+-- Ejecutar esto directo en Supabase y no guardarlo
+CREATE OR REPLACE FUNCTION pharmacy.algo_critico()
+...
+Correcto
+1. Crear migración en supabase/migrations/
+2. Revisar SQL
+3. Ejecutar local/remoto controladamente
+4. Registrar estado de migración
+5. Documentar cambio
+11.2. Si el backend es Python
+
+Si usamos backend en Python, aplica la misma filosofía:
+
+Nada crítico debe quedar en scripts sueltos.
+Todo debe estar dentro de la arquitectura del backend.
+Estructura recomendada
+backend/
+├── app/
+│   ├── main.py
+│   ├── api/
+│   │   └── routes/
+│   ├── services/
+│   ├── repositories/
+│   ├── schemas/
+│   ├── models/
+│   ├── core/
+│   └── db/
+├── migrations/
+├── scripts/
+└── tests/
+Responsabilidad por carpeta
+api/routes/
+= endpoints HTTP
+
+services/
+= lógica de negocio
+
+repositories/
+= acceso a base de datos
+
+schemas/
+= validación de entrada/salida
+
+models/
+= modelos ORM o entidades
+
+core/
+= configuración, seguridad, auth, settings
+
+db/
+= sesión, conexión, transacciones
+
+migrations/
+= cambios estructurales de base de datos
+
+scripts/
+= tareas auxiliares controladas
+
+tests/
+= pruebas
+11.3. Regla para scripts Python
+❌ Prohibido
+
+Crear scripts sueltos como:
+
+arreglar_stock.py
+actualizar_ordenes.py
+corregir_datos.py
+
+sin ubicación, sin control, sin validaciones y sin documentación.
+
+Riesgo
+nadie sabe si se ejecutó;
+puede ejecutarse dos veces;
+puede dañar datos;
+no queda auditoría;
+no hay rollback;
+no hay validación.
+Correcto
+
+Si se necesita un script auxiliar, debe ir en:
+
+backend/scripts/
+
+Ejemplo:
+
+backend/scripts/recalculate_inventory_cache.py
+backend/scripts/backfill_purchase_costs.py
+backend/scripts/cleanup_test_data.py
+
+Y debe cumplir:
+
+- nombre claro;
+- propósito documentado;
+- modo dry-run;
+- logs;
+- confirmación explícita para escribir;
+- idempotencia cuando sea posible;
+- no mezclar lógica crítica que debería estar en services/RPC.
+11.4. Regla para lógica crítica en Python
+
+La lógica crítica NO debe vivir en endpoints directamente.
+
+❌ Mal
+@app.post("/receive-purchase-order")
+def receive_purchase_order():
+    # 300 líneas creando recepción, lotes, movimientos y stock
+✅ Bien
+@router.post("/purchase-orders/{order_id}/receive")
+def receive_purchase_order(order_id: UUID, payload: ReceivePayload):
+    return purchase_order_service.receive_order(order_id, payload)
+
+Y en:
+
+services/purchase_order_service.py
+
+vive la lógica.
+
+11.5. Transacciones en Python
+
+Toda operación crítica debe usar transacción.
+
+Ejemplo conceptual
+def receive_order(order_id, payload):
+    with db.transaction():
+        order = repository.lock_order_for_update(order_id)
+        validate_order(order)
+        receipt = repository.create_receipt(...)
+        repository.create_batches(...)
+        repository.create_movements(...)
+        repository.update_order_status(...)
+        audit_service.log(...)
+Regla
+Si una operación tiene más de una escritura relacionada,
+debe ser transaccional.
+11.6. Migraciones en Python
+
+Si el backend usa Python con base SQL, los cambios estructurales deben ir en migraciones.
+
+Herramientas típicas:
+
+Alembic
+Django migrations
+SQLModel/Alembic
+Flask-Migrate
+Prohibido
+Modificar tablas manualmente en la base y no guardar migración.
+Correcto
+backend/migrations/
+
+o según framework:
+
+alembic/versions/
+11.7. Regla final backend
+Supabase o Python da lo mismo:
+
+Toda lógica crítica debe estar versionada,
+ubicada correctamente,
+probada,
+auditada,
+y ejecutarse de forma transaccional.
+Regla absoluta
+No existen “scripts rápidos” en producción.
+Existen migraciones, servicios, comandos controlados o scripts auxiliares documentados.
+
+
+# Filosofía de sincronización Backend / Base de Datos
+
+## Regla absoluta
+
+```text
+Crear una migración NO significa que el backend ya esté actualizado.
+La migración debe aplicarse y validarse en la base remota.
+```
+
+---
+
+# Flujo obligatorio de desarrollo
+
+## 1. Crear cambio estructural
+
+Todo cambio backend debe vivir en:
+
+```text
+supabase/migrations/
+```
+
+Ejemplos:
+
+* columnas;
+* tablas;
+* RPC/functions;
+* CHECKs;
+* triggers;
+* índices;
+* vistas;
+* RLS.
+
+---
+
+## 2. Validar localmente
+
+Antes de seguir:
+
+* revisar SQL;
+* validar frontend;
+* validar lógica;
+* ejecutar build/lint.
+
+---
+
+## 3. Aplicar remoto
+
+Después de validar:
+
+```bash
+supabase db push
+```
+
+o aplicación controlada equivalente.
+
+Nunca dejar migraciones críticas pendientes indefinidamente.
+
+---
+
+## 4. Validar entorno live
+
+Confirmar:
+
+* RPC existe;
+* columnas existen;
+* CHECKs actualizados;
+* frontend y backend alineados;
+* estados válidos;
+* flujos reales funcionando.
+
+---
+
+# Problema que debemos evitar
+
+```text
+Frontend más avanzado que la DB remota.
+```
+
+Ejemplo real:
+
+Frontend:
+
+* WAITING_APPROVAL
+
+DB remota:
+
+* CHECK viejo sin WAITING_APPROVAL
+
+Resultado:
+
+* errores PostgreSQL;
+* constraints;
+* RPC 404;
+* estados inválidos;
+* flujos rotos.
+
+---
+
+# Regla operacional
+
+```text
+Cada cambio backend debe terminar en:
+1. migración;
+2. commit;
+3. aplicación remota;
+4. validación live.
+```
+
+---
+
+# Nunca hacer
+
+```text
+- acumular muchas migraciones sin aplicar;
+- editar migraciones históricas ya aplicadas;
+- depender de SQL manual;
+- asumir que “como existe el archivo SQL ya funciona”;
+- seguir desarrollando sobre backend desalineado.
+```
+
+---
+
+# Regla de sincronización
+
+```text
+Frontend, backend y DB deben evolucionar juntos.
+```
+
+Si uno queda atrás:
+
+* aparecen bugs falsos;
+* errores difíciles de rastrear;
+* inconsistencias operacionales.
+
+---
+
+# Principio final
+
+```text
+El problema difícil no es escribir código.
+El problema difícil es mantener sincronizados:
+- frontend,
+- backend,
+- base de datos,
+- migraciones,
+- estados,
+- despliegues.
+```
+toda migración/RPC nueva debe aplicarse inmediatamente al remoto;
+- local y Supabase remoto deben mantenerse sincronizados;
+- no dejar migraciones pendientes;
+- no depender de fallback temporal;
+- validar live después de cada cambio backend.
+
+No se puede cerrar una feature si:
+- la RPC no existe en remoto;
+- la UI no fue validada live;
+- el flujo no persiste datos reales.

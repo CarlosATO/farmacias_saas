@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import { 
   ArrowLeftRight, 
   Search, 
@@ -10,6 +10,7 @@ import {
   User as UserIcon, 
   FileText, 
   History,
+  Calendar,
   ShieldAlert
 } from 'lucide-react';
 import { 
@@ -56,7 +57,7 @@ export default function Devoluciones() {
       const { data: saleData, error: saleErr } = await fetchSaleByNumber(searchTerm.trim());
       if (saleErr) throw saleErr;
       if (!saleData) {
-        setError('Venta no encontrada. Verifique el folio o ID.');
+        setError('Documento no encontrado. Verifique el documento interno o la referencia POS.');
         return;
       }
 
@@ -72,7 +73,7 @@ export default function Devoluciones() {
 
       // Consolidate return history
       const returnsMap = {};
-      (returnsRes.data || []).forEach(ret => {
+      (returnsRes.data || []).forEach((ret) => {
         const itemId = ret.sale_item_id;
         const qty = Number(ret.quantity) || 0;
         returnsMap[itemId] = (returnsMap[itemId] || 0) + qty;
@@ -117,7 +118,7 @@ export default function Devoluciones() {
 
     // Filter out zero quantities
     const itemsToReturn = Object.entries(selectedItems)
-      .filter(([_, qty]) => qty > 0)
+      .filter(([, qty]) => qty > 0)
       .map(([id, qty]) => ({ sale_item_id: id, quantity: qty }));
 
     if (itemsToReturn.length === 0) {
@@ -178,7 +179,7 @@ export default function Devoluciones() {
               <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input 
                 type="text" 
-                placeholder="Buscar venta por Folio o ID (ej: TICKET-1715112345)..."
+                placeholder="Buscar por documento interno o referencia POS (ej: 11, BOL-667254, 667254)..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-sm font-bold text-sm outline-none focus:border-[#4C3073] focus:ring-1 focus:ring-[#4C3073]/20 transition-all"
@@ -245,8 +246,8 @@ export default function Devoluciones() {
                 <div className="flex items-start gap-3">
                   <FileText size={18} className="text-[#4C3073] mt-1" />
                   <div>
-                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Documento</p>
-                    <p className="text-sm font-black text-gray-800">{sale.document_number}</p>
+                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Documento interno</p>
+                    <p className="text-sm font-black text-gray-800">{sale.internal_document_number || sale.folio || 'N/A'}</p>
                     <p className="text-[10px] text-gray-400 font-mono mt-0.5">{sale.id}</p>
                   </div>
                 </div>
@@ -260,6 +261,14 @@ export default function Devoluciones() {
                 </div>
                 <div className="flex items-start gap-3">
                   <History size={18} className="text-[#4C3073] mt-1" />
+                  <div>
+                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Referencia POS</p>
+                    <p className="text-sm font-black text-gray-800 uppercase">{sale.pos_reference || sale.document_number || 'N/A'}</p>
+                    <p className="text-[10px] text-gray-400 font-mono mt-0.5">{sale.document_number || 'N/A'}</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <Calendar size={18} className="text-[#4C3073] mt-1" />
                   <div>
                     <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Fecha Venta</p>
                     <p className="text-sm font-black text-gray-800">{new Date(sale.created_at).toLocaleString('es-CL')}</p>

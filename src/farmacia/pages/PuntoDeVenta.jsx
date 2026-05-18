@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Search, Plus, Trash2, ShieldAlert, FlaskConical,
@@ -6,18 +6,17 @@ import {
 } from 'lucide-react';
 import {
   createCashMovement, createSaleWithItems, fetchPosProducts,
-  fetchPosSessionSummary, verifyPosOperatorPin, closePosSession,
+  fetchPosSessionSummary, closePosSession,
   fetchPosTerminals, fetchSessionByTerminal, activateSession,
   fetchPharmacyPatients, createPharmacyPatient, createPrescriptionWithItems,
   fetchPrescriptionByFolio, fetchPrescriptionItems,
   fetchPendingPrescriptionsByPatient,
-  fetchDoctors, createDoctor, normalizeRut,
+  fetchDoctors, createDoctor,
   fetchDteById, fetchSaleItems, fetchBioequivalentSuggestions
 } from '../api/pharmacyClient';
 import { useSucursal } from '../context/SucursalContext';
 import CheckoutModal from '../components/CheckoutModal';
 import SearchableSelect from '../components/SearchableSelect';
-import { printInternalDte, downloadDtePdf } from '../services/dteService';
 
 const billDenominations = [20000, 10000, 5000, 2000, 1000];
 const coinDenominations = [500, 100, 50, 10];
@@ -49,7 +48,6 @@ export default function PuntoDeVenta() {
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [quickCashModal, setQuickCashModal] = useState({ open: false, amount: '', reason: '' });
   const [activeSession, setActiveSession] = useState(null);
-  const [sessionSummary, setSessionSummary] = useState(null);
   const [closingModal, setClosingModal] = useState({ 
     open: false, 
     closingBalance: '', 
@@ -80,14 +78,70 @@ export default function PuntoDeVenta() {
   const [pendingRecipesModal, setPendingRecipesModal] = useState({ open: false, prescriptions: [], loading: false, selected: new Set(), detailPrescription: null });
   // IDs de recetas creadas en express durante esta sesión de carrito (para excluir del modal de pendientes)
   const [expressCreatedPrescriptionIds, setExpressCreatedPrescriptionIds] = useState(new Set());
+  const [expressCreatedPrescriptionFolios, setExpressCreatedPrescriptionFolios] = useState(new Set());
+  const [isCreatingExpressPrescription, setIsCreatingExpressPrescription] = useState(false);
   // Receipt confirmation after successful sale
   const [saleReceipt, setSaleReceipt] = useState(null); // { sale_id, dte_id, dte_doc, items, total_amount, payment_method, dte_warning }
   const [bioequivalentPanel, setBioequivalentPanel] = useState({ open: false, product: null, suggestions: [], loading: false });
   const searchInputRef = useRef(null);
   const qtyRefs = useRef({});   // refs para inputs de cantidad en el carro
+  const cartRef = useRef(cart);
+  const expressCreatedPrescriptionIdsRef = useRef(expressCreatedPrescriptionIds);
+  const expressCreatedPrescriptionFoliosRef = useRef(expressCreatedPrescriptionFolios);
+  const expressPrescriptionLookupRef = useRef(new Map());
+  const expressPrescriptionByProductRef = useRef(new Map());
+  const isCreatingExpressPrescriptionRef = useRef(false);
+  useEffect(() => {
+    cartRef.current = cart;
+  }, [cart]);
+
+  useEffect(() => {
+    expressCreatedPrescriptionIdsRef.current = expressCreatedPrescriptionIds;
+  }, [expressCreatedPrescriptionIds]);
+
+  useEffect(() => {
+    expressCreatedPrescriptionFoliosRef.current = expressCreatedPrescriptionFolios;
+  }, [expressCreatedPrescriptionFolios]);
+
+  useEffect(() => {
+    if (!validationModal.isOpen) {
+      isCreatingExpressPrescriptionRef.current = false;
+      setIsCreatingExpressPrescription(false);
+    }
+  }, [validationModal.isOpen]);
+
+  const isExpressPrescriptionExcluded = (prescription) => {
+    if (!prescription) return false;
+    return (
+      expressCreatedPrescriptionIdsRef.current.has(prescription.id) ||
+      expressCreatedPrescriptionFoliosRef.current.has(prescription.folio_electronico)
+    );
+  };
+
+  const normalizeCartItemPrescription = (item) => {
+    const prescriptionFolio = item?.prescription_folio || item?.correlativo_asociado || item?.datos_medico?.folio || null;
+    const resolvedPrescriptionId = item?.prescription_id
+      || item?.prescriptionId
+      || (prescriptionFolio ? expressPrescriptionLookupRef.current.get(prescriptionFolio) : null)
+      || (item?.id ? expressPrescriptionByProductRef.current.get(item.id) : null)
+      || null;
+
+    const isControlled = (item?.sale_condition || item?.prescription_type || 'VD').toUpperCase() !== 'VD'
+      && (item?.sale_condition || item?.prescription_type || 'VD').toUpperCase() !== 'VENTA_LIBRE';
+
+    return {
+      ...item,
+      prescription_id: resolvedPrescriptionId,
+      prescription_item_id: item?.prescription_item_id || null,
+      prescription_folio: prescriptionFolio,
+      prescription_status: item?.prescription_status || null,
+      prescription_patient_id: item?.prescription_patient_id || item?.patient_id || null,
+      has_valid_prescription: !isControlled || Boolean(resolvedPrescriptionId),
+    };
+  };
 
   // ── CARGA DE DATOS ──────────────────────────────────────────────────────
-  const loadInitialData = async () => {
+  const loadInitialData = useCallback(async () => {
     if (!activeWarehouse?.id) return;
     
     // Si no hay terminalID, cargamos la lista para seleccion
@@ -117,18 +171,15 @@ export default function PuntoDeVenta() {
         if (currentSession.status === 'PENDING') {
           setActivationModal({ open: true, pinCode: '' });
         } else {
-          const { data: summaryData } = await fetchPosSessionSummary(currentSession);
-          setSessionSummary(summaryData);
+          await fetchPosSessionSummary(currentSession);
         }
-      } else {
-        setSessionSummary(null);
       }
     } catch (err) {
       console.error("Error cargando POS:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeWarehouse?.id, terminalId]);
 
   const handleSelectTerminal = (id) => {
     localStorage.setItem('pharmacy_terminal_id', id);
@@ -156,7 +207,11 @@ export default function PuntoDeVenta() {
     }
   };
 
-  useEffect(() => { loadInitialData(); }, [activeWarehouse?.id, terminalId]);
+  useEffect(() => { loadInitialData(); }, [loadInitialData]);
+
+  const handlePrintReceipt = () => {
+    window.print();
+  };
 
   // Auto-focus search input when modal opens
   useEffect(() => {
@@ -168,9 +223,6 @@ export default function PuntoDeVenta() {
   // ── PUENTE INTELIGENTE: detector de recetas pendientes ─────────────────
   useEffect(() => {
     if (!selectedPatient?.id || selectedPatient.id === 'PÚBLICO GENERAL') return;
-    // Nuevo paciente → limpiar set de recetas express (distinto paciente, distinta sesión)
-    setExpressCreatedPrescriptionIds(new Set());
-    
     const checkPending = async () => {
       try {
         const { data, error } = await fetchPendingPrescriptionsByPatient(selectedPatient.id);
@@ -182,10 +234,20 @@ export default function PuntoDeVenta() {
               return { ...p, items: items || [] };
             })
           );
+          const uniquePending = [];
+          const seenPending = new Set();
+          for (const prescription of enriched) {
+            const key = `${prescription.id || ''}:${prescription.folio_electronico || ''}`;
+            if (seenPending.has(key)) continue;
+            seenPending.add(key);
+            uniquePending.push(prescription);
+          }
           // Excluir recetas ya asociadas al carrito actual (express creadas en esta sesión o cargadas previamente)
-          const cartPrescriptionIds = new Set(cart.map(c => c.prescription_id).filter(Boolean));
-          const allExcluded = new Set([...expressCreatedPrescriptionIds, ...cartPrescriptionIds]);
-          const filtered = enriched.filter(p => !allExcluded.has(p.id));
+          const cartPrescriptionIds = new Set(cartRef.current.map(c => c.prescription_id).filter(Boolean));
+          const filtered = uniquePending.filter(p => {
+            if (cartPrescriptionIds.has(p.id)) return false;
+            return !isExpressPrescriptionExcluded(p);
+          });
           if (filtered.length === 0) return; // nada que mostrar
           const selected = new Set(); // Require user to explicitly select
           setPendingRecipesModal({ open: true, prescriptions: filtered, loading: false, selected, detailPrescription: null });
@@ -216,14 +278,17 @@ export default function PuntoDeVenta() {
 
         const items = prescription.items || [];
         if (!items.length) continue;
+
+        if (isExpressPrescriptionExcluded(prescription)) {
+          continue;
+        }
         
         for (const item of items) {
           const product = item.product;
           if (!product) continue;
           
-          // Usar precio desde productos enriquecidos (locales) o fallback al catálogo
           const enriched = products.find(p => p.id === product.id);
-          const effectivePrice = enriched?.price_sale || Number(product.price_sale ?? product.unit_price ?? 0);
+          const effectivePrice = Number(enriched?.effective_price_sale ?? enriched?.price_sale ?? 0);
           const effectiveStock = enriched?.stock_disponible || 0;
           
           const existingIdx = updatedCart.findIndex(
@@ -266,7 +331,37 @@ export default function PuntoDeVenta() {
     }
   };
 
+  const buildPrescriptionMeta = (prescriptionResult, fallbackFolio = null) => {
+    const header = prescriptionResult?.header || prescriptionResult?.data?.header || prescriptionResult?.data || prescriptionResult || null;
+    const prescriptionId = header?.id || header?.prescription_id || prescriptionResult?.id || prescriptionResult?.prescription_id || null;
+    const folioElectronico = header?.folio_electronico || prescriptionResult?.folio_electronico || fallbackFolio || null;
+    return {
+      prescription_id: prescriptionId,
+      prescription_folio: folioElectronico,
+      prescription_status: header?.status || null,
+      prescription_patient_id: header?.patient_id || null,
+      prescription_item_id: header?.item_id || header?.prescription_item_id || null,
+    };
+  };
+
   // ── HOTKEYS GLOBALES ────────────────────────────────────────────────────
+  const handleCheckout = useCallback(() => {
+    if (cart.length === 0 || isProcessingSale) return;
+
+    // Validación: Si hay productos con receta, debe haber un paciente real
+    const needsPrescription = cart.some(item => {
+      const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
+      return condition !== 'VD' && condition !== 'VENTA_LIBRE';
+    });
+
+    if (needsPrescription && !selectedPatient.id) {
+      alert('Esta venta contiene productos que requieren receta médica. Debe seleccionar o registrar un Paciente real para continuar.');
+      return;
+    }
+
+    setShowCheckoutModal(true);
+  }, [cart, isProcessingSale, selectedPatient.id]);
+
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'F1') { e.preventDefault(); setShowSearchModal(true); }
@@ -275,7 +370,7 @@ export default function PuntoDeVenta() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [cart, isProcessingSale]);
+  }, [handleCheckout]);
 
   // ── LÓGICA DEL CARRITO ──────────────────────────────────────────────────
   const tryAddToCart = (product) => {
@@ -301,8 +396,7 @@ export default function PuntoDeVenta() {
     addToCart(product);
   };
 
-  // Helper: precio seguro con fallback
-  const safePrice = (p) => Number(p?.price_sale ?? p?.unit_price ?? p?.price ?? 0);
+  const safePrice = (p) => Number(p?.effective_price_sale ?? p?.price_sale ?? 0);
 
   const showInsufficientStockAlert = () => {
     alert('Stock disponible insuficiente. No se puede vender stock en cuarentena.');
@@ -316,7 +410,7 @@ export default function PuntoDeVenta() {
 
   const addToCart = (product, metadata = {}) => {
     // Bloqueo de venta si no hay precio definido para este local
-    if (Number(product.price_sale) <= 0) {
+    if (Number(safePrice(product)) <= 0) {
       alert(`Bloqueo: El producto ${product.name} no tiene un precio de venta asignado para este local.`);
       return;
     }
@@ -340,7 +434,7 @@ export default function PuntoDeVenta() {
     } else {
       setCart(prev => [...prev, {
         ...product,
-        price_sale: safePrice(product),   // ← blindaje: siempre un número
+        price_sale: safePrice(product),
         quantity: 1,
         ...metadata
       }]);
@@ -390,6 +484,45 @@ export default function PuntoDeVenta() {
   const calculateTotal = () => cart.reduce((acc, item) => acc + (safePrice(item) * Number(item.quantity || 0)), 0);
   const totalItems = cart.reduce((acc, item) => acc + (Number(item.quantity) || 0), 0);
 
+  const mergeRecipeItemsIntoCart = (currentCart, recipeItems) => {
+    const nextCart = [...currentCart];
+
+    recipeItems.forEach((newItem) => {
+      const newProductId = newItem.id || newItem.product_id;
+      const newPrescriptionId = newItem.prescription_id || null;
+      const newPrescriptionItemId = newItem.prescription_item_id || null;
+      const newCorrelativo = newItem.correlativo_asociado || null;
+
+      const existingIdx = nextCart.findIndex((cartItem) => {
+        const cartProductId = cartItem.id || cartItem.product_id;
+        const sameProduct = cartProductId === newProductId;
+        if (!sameProduct) return false;
+
+        const samePrescriptionId = newPrescriptionId && cartItem.prescription_id === newPrescriptionId;
+        const samePrescriptionItemId = newPrescriptionItemId && cartItem.prescription_item_id === newPrescriptionItemId;
+        const sameCorrelativo = newCorrelativo && cartItem.correlativo_asociado === newCorrelativo;
+
+        return samePrescriptionItemId || samePrescriptionId || sameCorrelativo;
+      });
+
+      if (existingIdx !== -1) {
+        const existingItem = nextCart[existingIdx];
+        nextCart[existingIdx] = {
+          ...existingItem,
+          quantity: Number(existingItem.quantity || 0) + Number(newItem.quantity || 0),
+          prescription_id: existingItem.prescription_id || newPrescriptionId,
+          prescription_item_id: existingItem.prescription_item_id || newPrescriptionItemId,
+          correlativo_asociado: existingItem.correlativo_asociado || newCorrelativo,
+          validation_rut: existingItem.validation_rut || newItem.validation_rut,
+        };
+      } else {
+        nextCart.push(normalizeCartItemPrescription(newItem));
+      }
+    });
+
+    return nextCart;
+  };
+
   const handleLlamarReceta = async () => {
     if (!validationModal.folioSearch) return;
     setValidationModal(prev => ({ ...prev, isLoading: true }));
@@ -430,7 +563,7 @@ export default function PuntoDeVenta() {
           const remaining = (item.quantity_prescribed || 1) - (item.quantity_dispensed || 0);
           // Enriquecer con precio y stock del catálogo POS local (igual que el modal de pendientes)
           const enriched = products.find(p => p.id === item.product?.id);
-          const effectivePrice = enriched?.price_sale || Number(item.product?.price_sale ?? item.product?.unit_price ?? 0);
+          const effectivePrice = Number(enriched?.effective_price_sale ?? enriched?.price_sale ?? 0);
           const effectiveStock = enriched?.stock_disponible ?? 0;
           return {
             ...item.product,
@@ -451,18 +584,7 @@ export default function PuntoDeVenta() {
         return;
       }
 
-      // Append and handle duplicates (if same product with same prescription, merge quantity)
-      let updatedCart = [...cart];
-      newCartItems.forEach(newItem => {
-        const existingIdx = updatedCart.findIndex(c => c.id === newItem.id && c.correlativo_asociado === newItem.correlativo_asociado);
-        if (existingIdx !== -1) {
-          updatedCart[existingIdx].quantity += newItem.quantity;
-        } else {
-          updatedCart.push(newItem);
-        }
-      });
-
-      setCart(updatedCart);
+      setCart(prev => mergeRecipeItemsIntoCart(prev, newCartItems));
 
       // Auto-select patient if possible
       if (prescription.patient) {
@@ -512,7 +634,7 @@ export default function PuntoDeVenta() {
     }, 300);
   };
 
-  // Keep manual search handlers as fallback (Enter key)
+  // Keep manual search handlers for Enter key
   const handleExpressPatientSearch = async () => {
     const q = expressFormData.patientRut.trim();
     if (!q) return;
@@ -532,9 +654,12 @@ export default function PuntoDeVenta() {
   const handleExpressValidate = async () => {
     const { rut, nombre, folio, patientRut, patientNombre, institution } = expressFormData;
     if (!validationModal.product) return;
+    if (isCreatingExpressPrescriptionRef.current || validationModal.isLoading) return;
 
     if (!folio.trim()) { alert('El N° de Folio / Receta es obligatorio.'); return; }
 
+    isCreatingExpressPrescriptionRef.current = true;
+    setIsCreatingExpressPrescription(true);
     setValidationModal(prev => ({ ...prev, isLoading: true }));
     try {
       // 1. Resolver paciente: usar seleccionado, o buscar por RUT, o crear
@@ -599,11 +724,24 @@ export default function PuntoDeVenta() {
       );
       if (prescErr) throw prescErr;
 
-      const prescriptionId = prescResult?.header?.id || prescResult?.id || null;
+      const prescriptionFolio = folio.trim();
+    const prescriptionMeta = buildPrescriptionMeta(prescResult, prescriptionFolio);
+    const prescriptionId = prescriptionMeta.prescription_id;
 
       // Registrar esta receta como creada en express (para excluir del modal de pendientes)
       if (prescriptionId) {
+        expressCreatedPrescriptionIdsRef.current = new Set([...expressCreatedPrescriptionIdsRef.current, prescriptionId]);
         setExpressCreatedPrescriptionIds(prev => new Set([...prev, prescriptionId]));
+      }
+      if (prescriptionFolio) {
+        expressCreatedPrescriptionFoliosRef.current = new Set([...expressCreatedPrescriptionFoliosRef.current, prescriptionFolio]);
+        setExpressCreatedPrescriptionFolios(prev => new Set([...prev, prescriptionFolio]));
+      }
+      if (prescriptionId && prescriptionFolio) {
+        expressPrescriptionLookupRef.current.set(prescriptionFolio, prescriptionId);
+      }
+      if (prescriptionId && product?.id) {
+        expressPrescriptionByProductRef.current.set(product.id, prescriptionId);
       }
 
       // 4. Seleccionar el paciente en el POS y agregar al carrito con prescription_id
@@ -612,20 +750,37 @@ export default function PuntoDeVenta() {
       // Si el producto ya está en carrito, solo actualizar su prescription_id
       const existing = cart.find(c => c.id === product.id && !c.prescription_id);
       if (existing) {
-        setCart(prev => prev.map(c =>
-          c.id === product.id && !c.prescription_id
-            ? { ...c, prescription_id: prescriptionId, correlativo_asociado: folio.trim(), validation_rut: prescriber_rut }
-            : c
-        ));
+        setCart(prev => prev.map(c => {
+          if (c.id !== product.id || c.prescription_id) return c;
+          const normalized = normalizeCartItemPrescription({
+            ...c,
+            ...prescriptionMeta,
+            prescription_id: prescriptionId,
+            prescription_item_id: c.prescription_item_id || prescriptionMeta.prescription_item_id || null,
+            correlativo_asociado: prescriptionFolio,
+            validation_rut: prescriber_rut,
+            es_receta_express: true,
+            prescription_patient_id: patient.id,
+          });
+          return normalized;
+        }));
       } else {
-        addToCart(product, {
+        const itemAgregado = normalizeCartItemPrescription({
+          ...product,
+          price_sale: safePrice(product),
+          quantity: 1,
           es_receta_express: true,
+          ...prescriptionMeta,
           prescription_id: prescriptionId,
-          correlativo_asociado: folio.trim(),
+          prescription_item_id: prescriptionMeta.prescription_item_id || prescResult?.items?.[0]?.id || null,
+          correlativo_asociado: prescriptionFolio,
           validation_rut: prescriber_rut,
           prescriber_name,
-          datos_medico: { rut: prescriber_rut, nombre: prescriber_name, folio: folio.trim() }
+          prescription_patient_id: patient.id,
+          patient_id: patient.id,
+          datos_medico: { rut: prescriber_rut, nombre: prescriber_name, folio: prescriptionFolio }
         });
+        setCart(prev => [...prev, itemAgregado]);
       }
 
       setValidationModal(prev => ({ ...prev, isOpen: false, isLoading: false }));
@@ -635,24 +790,10 @@ export default function PuntoDeVenta() {
       console.error('Error en validación express:', err);
       alert('Error al registrar receta: ' + (err.message || err));
       setValidationModal(prev => ({ ...prev, isLoading: false }));
+    } finally {
+      isCreatingExpressPrescriptionRef.current = false;
+      setIsCreatingExpressPrescription(false);
     }
-  };
-
-  const handleCheckout = () => {
-    if (cart.length === 0 || isProcessingSale) return;
-
-    // Validación: Si hay productos con receta, debe haber un paciente real
-    const needsPrescription = cart.some(item => {
-      const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
-      return condition !== 'VD' && condition !== 'VENTA_LIBRE';
-    });
-
-    if (needsPrescription && !selectedPatient.id) {
-      alert('Esta venta contiene productos que requieren receta médica. Debe seleccionar o registrar un Paciente real para continuar.');
-      return;
-    }
-
-    setShowCheckoutModal(true);
   };
 
   const handleSavePatient = async () => {
@@ -714,7 +855,6 @@ export default function PuntoDeVenta() {
     if (!activeSession?.id) return;
 
     const closingBalance = declaredTotal;
-    const expectedCash = Number(sessionSummary?.expectedCash || 0);
 
     if (closingBalance < 0) {
       alert('El efectivo fisico no puede ser negativo.');
@@ -728,25 +868,13 @@ export default function PuntoDeVenta() {
       alert('Debes ingresar el PIN de 4 dígitos del operador para cerrar el turno.');
       return;
     }
-    const difference = closingBalance - expectedCash;
-
     setIsProcessingSale(true);
     try {
-      const { data: pinValid, error: pinError } = await verifyPosOperatorPin({
-        operatorId: activeSession.operator.id,
-        warehouseId: activeWarehouse.id,
-        pinCode: closingModal.pinCode.trim(),
-      });
-      if (pinError) throw pinError;
-      if (!pinValid) {
-        alert('PIN de operador inválido. No se puede cerrar el turno.');
-        return;
-      }
-
-      const { error } = await closePosSession({
+      const { data: closeResult, error } = await closePosSession({
         sessionId: activeSession.id,
-        closingBalance,
-        difference,
+        operatorId: activeSession.operator.id,
+        pinCode: closingModal.pinCode.trim(),
+        countedCash: closingBalance,
       });
       if (error) throw error;
 
@@ -759,7 +887,13 @@ export default function PuntoDeVenta() {
           '500': 0, '100': 0, '50': 0, '10': 0
         }
       });
-      alert('Turno cerrado correctamente.');
+      const backendDifference = Number(closeResult?.summary?.difference || 0);
+      if (backendDifference !== 0) {
+        const direction = backendDifference > 0 ? 'sobrante' : 'faltante';
+        alert(`Turno cerrado con ${direction} de $${Math.abs(backendDifference).toLocaleString('es-CL')}.`);
+      } else {
+        alert('Turno cerrado correctamente.');
+      }
       loadInitialData();
     } catch (error) {
       console.error('Error cerrando turno:', error);
@@ -773,18 +907,21 @@ export default function PuntoDeVenta() {
     setIsProcessingSale(true);
     try {
       // 1. Procesar Recetas si es necesario
-      const updatedCart = [...cart];
-      
-      for (let i = 0; i < updatedCart.length; i++) {
-        const item = updatedCart[i];
+      const normalizedCart = cart.map(item => normalizeCartItemPrescription(item));
+
+      for (const item of normalizedCart) {
+        const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
+        if (condition !== 'VD' && condition !== 'VENTA_LIBRE' && !item.has_valid_prescription) {
+          throw new Error('Este producto requiere una receta válida asociada antes de vender.');
+        }
+      }
+
+      for (let i = 0; i < normalizedCart.length; i++) {
+        const item = normalizedCart[i];
         const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
         
-        let mappedType = 'RECETA_SIMPLE';
-        if (condition === 'RR' || condition === 'RECETA_RETENIDA') mappedType = 'RECETA_RETENIDA';
-        if (condition === 'RCH' || condition === 'RECETA_CHEQUE') mappedType = 'RECETA_CHEQUE';
-
         // Si el item requiere receta y NO tiene una vinculada (o es Receta Simple)
-        if (condition !== 'VD' && condition !== 'VENTA_LIBRE' && !item.prescription_id) {
+        if (condition !== 'VD' && condition !== 'VENTA_LIBRE' && !item.has_valid_prescription) {
           const prescRes = await createPrescriptionWithItems({
             patient_id: selectedPatient.id,
             prescriber_rut: item.validation_rut || item.datos_medico?.rut || 'POR_DEFINIR',
@@ -799,12 +936,30 @@ export default function PuntoDeVenta() {
           if (prescRes.error) throw new Error(prescRes.error.message || 'No se pudo crear la receta de la venta.');
           
           if (prescRes.data) {
-            updatedCart[i] = { ...item, prescription_id: prescRes.data.id };
+            const normalizedSalePrescription = buildPrescriptionMeta(prescRes.data, item.prescription_folio || item.correlativo_asociado || item.datos_medico?.folio || null);
+            normalizedCart[i] = {
+              ...item,
+              ...normalizedSalePrescription,
+              prescription_id: normalizedSalePrescription.prescription_id,
+              prescription_folio: normalizedSalePrescription.prescription_folio || item.prescription_folio || item.datos_medico?.folio || null,
+              prescription_status: normalizedSalePrescription.prescription_status || item.prescription_status || null,
+              prescription_patient_id: normalizedSalePrescription.prescription_patient_id || item.prescription_patient_id || selectedPatient.id || null,
+              has_valid_prescription: Boolean(normalizedSalePrescription.prescription_id),
+            };
           }
         }
       }
 
-      const usedPrescriptionIds = new Set(updatedCart.map(item => item.prescription_id).filter(Boolean));
+      const missingPrescriptionItem = normalizedCart.find(item => {
+        const condition = (item.sale_condition || item.prescription_type || 'VD').toUpperCase();
+        return condition !== 'VD' && condition !== 'VENTA_LIBRE' && !item.has_valid_prescription;
+      });
+
+      if (missingPrescriptionItem) {
+        throw new Error('Este producto requiere una receta válida asociada antes de vender.');
+      }
+
+      const usedPrescriptionIds = new Set(normalizedCart.map(item => item.prescription_id).filter(Boolean));
       const saleHeader = {
         ...modalSaleHeader,
         patient_id: selectedPatient.id,
@@ -813,12 +968,12 @@ export default function PuntoDeVenta() {
         operator_id: activeSession?.operator_id || activeSession?.operator?.id || null
       };
 
-      const sale = await createSaleWithItems(saleHeader, updatedCart, activeWarehouse.id);
+      const sale = await createSaleWithItems(saleHeader, normalizedCart, activeWarehouse.id);
       
       // Build receipt data for the confirmation overlay
-      let dteDoc = null;
+      let dteDoc = sale?.dte_doc || null;
       let saleItems = [];
-      if (sale?.dte_id) {
+      if (!dteDoc && sale?.dte_id) {
         try {
           const [{ data: dte }, { data: items }] = await Promise.all([
             fetchDteById(sale.dte_id),
@@ -841,7 +996,9 @@ export default function PuntoDeVenta() {
         dte_warning: sale?.dte_warning || null,
         items: saleItems,
         total_amount: sale?.total_amount || saleHeader.total_amount,
-        payment_method: sale?.payment_method || saleHeader.payment_method
+        payment_method: sale?.payment_method || saleHeader.payment_method,
+        warehouse_name: activeWarehouse?.name || 'Sucursal',
+        operator_name: activeSession?.operator?.full_name || activeSession?.operator?.name || 'Operador POS'
       });
       
       setCart([]);
@@ -898,6 +1055,25 @@ export default function PuntoDeVenta() {
     if (c === 'RECETA_CHEQUE') return 'RCH';
     return c;
   };
+
+  const getSuggestionType = (alt) => alt?.suggestion_type || (alt?.is_bioequivalent ? 'BIOEQUIVALENTE_OFICIAL' : 'ALTERNATIVA_FARMACEUTICA');
+
+  const getSuggestionTypeLabel = (alt) => (getSuggestionType(alt) === 'BIOEQUIVALENTE_OFICIAL' ? 'Bioequivalente oficial' : 'Alternativa farmacéutica');
+
+  const hasOfficialBioequivalent = bioequivalentPanel.suggestions.some((alt) => getSuggestionType(alt) === 'BIOEQUIVALENTE_OFICIAL');
+
+  const bioequivalentPanelTitle = bioequivalentPanel.loading
+    ? 'Buscando alternativas...'
+    : (bioequivalentPanel.suggestions.length > 0
+      ? (hasOfficialBioequivalent ? 'Bioequivalentes disponibles' : 'Alternativas farmacéuticas disponibles')
+      : 'Sin alternativas disponibles')
+  ;
+
+  const bioequivalentPanelSubtitle = bioequivalentPanel.loading
+    ? 'Analizando coincidencias por DCI, concentración y forma farmacéutica.'
+    : (bioequivalentPanel.suggestions.length > 0
+      ? 'Coincidencia por DCI, concentración y forma farmacéutica.'
+      : 'No hay productos disponibles con stock en esta sucursal.');
 
   const filteredProducts = products;
 
@@ -981,171 +1157,185 @@ export default function PuntoDeVenta() {
   // RENDER
   // ════════════════════════════════════════════════════════════════════════
   return (
-    <div className="flex flex-col h-full bg-slate-100 font-sans text-slate-800">
+    <div className="flex h-[calc(100vh-140px)] bg-slate-100 font-sans text-slate-800 overflow-hidden">
+        {/* LEFT PANEL (~68%) */}
+        <div className="flex-1 flex flex-col min-w-0 border-r border-slate-200 bg-slate-50/50 relative">
+           {/* HEADER IZQUIERDA (Busqueda) */}
+           <div className="px-6 py-4 bg-white border-b border-slate-200 shrink-0 shadow-sm relative z-10 flex items-center justify-between gap-4">
+               <button onClick={() => setShowSearchModal(true)}
+                 className="flex-1 flex items-center gap-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl px-4 py-3 text-left hover:border-emerald-400 hover:bg-emerald-50/30 transition-all group">
+                 <Search size={18} className="text-slate-300 group-hover:text-emerald-500 transition-colors shrink-0" />
+                 <span className="text-sm font-bold text-slate-400 group-hover:text-emerald-600 transition-colors">
+                   Buscar producto o escanear código... <span className="text-slate-300 text-xs">(F1)</span>
+                 </span>
+               </button>
+               <button 
+                 onClick={() => setQuickCashModal({ open: true, amount: '', reason: '' })}
+                 className="shrink-0 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-black uppercase text-slate-600 hover:bg-slate-50 transition-colors shadow-sm"
+               >
+                 <ArrowUpCircle size={16} className="text-slate-400" />
+                 Retiro
+               </button>
+               {activeSession && (
+                 <button
+                   onClick={() => setClosingModal(prev => ({ ...prev, open: true }))}
+                   className="shrink-0 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[11px] font-black uppercase text-red-600 hover:bg-red-100 transition-colors shadow-sm"
+                 >
+                   <ShieldAlert size={16} />
+                   Cierre
+                 </button>
+               )}
+           </div>
 
-      {/* ── HEADER ──────────────────────────────────────────────────────── */}
-      <div className="bg-slate-900 text-white px-6 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-4">
-          <div className="p-2.5 bg-emerald-500 rounded-xl"><ShoppingCart size={22} /></div>
-          <div>
-            <h1 className="text-lg font-black tracking-tight uppercase leading-none">Terminal de Venta</h1>
-            <div className="flex items-center gap-2 mt-1">
-               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest shrink-0">Venta a:</span>
-               <div className="flex items-center gap-1">
-                  <SearchableSelect 
-                    className="w-64"
-                    placeholder="PÚBLICO GENERAL"
-                    options={[
-                      { value: null, label: 'PÚBLICO GENERAL', subLabel: '1-9' },
-                      ...patients.map(p => ({ value: p.id, label: p.full_name, subLabel: p.rut }))
-                    ]}
-                    value={selectedPatient.id}
-                    onChange={(val) => {
-                      if (val === null) setSelectedPatient({ id: null, full_name: 'PÚBLICO GENERAL', rut: '1-9' });
-                      else {
-                        const p = patients.find(pat => pat.id === val);
-                        if (p) setSelectedPatient(p);
-                      }
-                    }}
-                  />
-                  <button 
-                    onClick={() => setShowAddPatientModal(true)}
-                    className="p-2 bg-slate-800 hover:bg-emerald-600 text-white rounded-lg transition-colors shadow-sm"
-                    title="Nuevo Paciente"
-                  >
-                    <Plus size={16} />
-                  </button>
-               </div>
+           {/* LISTA DE PRODUCTOS CARRITO RICH FORMAT */}
+           <div className="flex-1 overflow-y-auto p-6 space-y-3 relative z-0">
+               {cart.length === 0 ? (
+                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
+                    <ShoppingCart size={64} className="mb-4 opacity-20" />
+                    <p className="text-lg font-black uppercase tracking-widest text-slate-300">Terminal Vacía</p>
+                    <p className="text-xs font-bold text-slate-400 mt-1">Presiona F1 para buscar</p>
+                 </div>
+               ) : (
+                  cart.map(item => (
+                    <div key={item.id} className="bg-white border border-slate-200 rounded-2xl p-4 flex gap-4 shadow-sm relative overflow-hidden group hover:border-emerald-300 transition-colors">
+                       <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-4">
+                             <div className="min-w-0">
+                                <h3 className="text-sm font-black text-slate-800 leading-tight truncate">{item.name}</h3>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5 truncate">{item.laboratory || 'GENERICO'} • {item.dci || 'Sin DCI'}</p>
+                             </div>
+                             <div className="text-right shrink-0">
+                                <span className="block text-lg font-black text-emerald-700">{fmtCLP(safePrice(item) * Number(item.quantity))}</span>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase">{fmtCLP(safePrice(item))} c/u</span>
+                             </div>
+                          </div>
+                          <div className="flex items-center gap-2 mt-3 flex-wrap">
+                             <span className={`px-2 py-0.5 rounded-md text-[9px] font-black border ${getBadgeColor(item.sale_condition || item.prescription_type)}`}>
+                                {getConditionLabel(item)}
+                             </span>
+                             {item.is_bioequivalent && <span className="px-2 py-0.5 rounded-md text-[9px] font-black bg-blue-50 text-blue-700 border border-blue-200">BIOEQUIVALENTE</span>}
+                             {(item.stock_disponible <= 5) && <span className="px-2 py-0.5 rounded-md text-[9px] font-black bg-orange-50 text-orange-700 border border-orange-200">STOCK BAJO ({item.stock_disponible})</span>}
+                          </div>
+                          {(item.validation_rut || item.prescription_id || item.correlativo_asociado) && (
+                             <div className="mt-3 p-2 bg-slate-50 border border-slate-100 rounded-lg flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                   <Stethoscope size={14} className="text-slate-400" />
+                                   <div>
+                                      {item.validation_rut && <p className="text-[10px] font-black text-slate-600 uppercase tracking-tighter">DR: {item.validation_rut}</p>}
+                                      {(item.prescription_id || item.correlativo_asociado) && <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">RECETA: {item.correlativo_asociado || item.prescription_id?.slice(0,8)}</p>}
+                                   </div>
+                                </div>
+                             </div>
+                          )}
+                       </div>
+                       {/* Controles Cantidad */}
+                       <div className="flex flex-col items-end justify-between border-l border-slate-100 pl-4 shrink-0">
+                          <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                             <Trash2 size={16} />
+                          </button>
+                          <div className="bg-slate-50 rounded-xl p-1 border border-slate-200">
+                             <input
+                               ref={el => { qtyRefs.current[item.id] = el; }}
+                               type="number" min="1"
+                               className="w-12 text-center text-xs font-black text-slate-800 bg-transparent outline-none focus:bg-white focus:border-emerald-500"
+                               value={item.quantity}
+                               onChange={e => setQuantity(item.id, e.target.value)}
+                               onFocus={e => e.target.select()}
+                             />
+                          </div>
+                       </div>
+                    </div>
+                  ))
+               )}
+           </div>
+        </div>
+
+        {/* RIGHT PANEL (~32%) CHECKOUT TIPO TERMINAL */}
+        <div className="w-[360px] xl:w-[400px] flex flex-col bg-white shrink-0 shadow-[-10px_0_30px_rgba(0,0,0,0.03)] z-20">
+            {/* HEADER TERMINAL */}
+            <div className="p-5 bg-slate-900 text-white shrink-0 flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2 text-slate-300">
+                        <Wallet size={14} className="text-emerald-400" />
+                        Terminal POS
+                    </h2>
+                    <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest ${activeSession?.status === 'OPEN' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                        {activeSession?.status === 'OPEN' ? 'Abierta' : 'Cerrada'}
+                    </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700/50">
+                        <span className="block text-[8px] text-slate-400 font-black uppercase tracking-widest mb-0.5">Operador</span>
+                        <span className="block text-[10px] text-white font-bold truncate">{activeSession?.operator?.full_name || '—'}</span>
+                    </div>
+                    <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700/50">
+                        <span className="block text-[8px] text-slate-400 font-black uppercase tracking-widest mb-0.5">Sucursal</span>
+                        <span className="block text-[10px] text-emerald-400 font-bold truncate">{activeWarehouse?.name || '—'}</span>
+                    </div>
+                </div>
             </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-6">
-          <div className={`hidden xl:flex items-center gap-2 rounded-xl border px-4 py-2 text-[11px] font-black uppercase ${activeSession?.status === 'OPEN' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
-            <Wallet size={14} />
-            {activeSession?.status === 'OPEN' ? `Caja abierta · ${activeSession.operator?.full_name}` : 'Caja cerrada'}
-          </div>
-          <button
-            type="button"
-            onClick={() => setQuickCashModal({ open: true, amount: '', reason: '' })}
-            className="hidden md:inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-[11px] font-black uppercase text-white hover:bg-white/15 transition-colors"
-          >
-            <ArrowUpCircle size={16} />
-            Retiro Rapido
-          </button>
-          {activeSession && (
-            <button
-              type="button"
-              onClick={() => setClosingModal(prev => ({ ...prev, open: true }))}
-              className="hidden lg:inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-[11px] font-black uppercase text-white hover:bg-red-700 transition-colors shadow-lg shadow-red-900/20"
-            >
-              <ShieldAlert size={16} />
-              Cerrar Turno
-            </button>
-          )}
-          <div className="bg-slate-800 border border-slate-700 px-4 py-2 rounded-xl flex items-center gap-2">
-            <MapPin size={14} className="text-emerald-400" />
-            <div className="flex flex-col">
-              <span className="text-[9px] font-black text-slate-500 uppercase leading-none">Local</span>
-              <span className="text-xs font-black text-emerald-400 uppercase">{activeWarehouse?.name || '—'}</span>
+
+            {/* BODY CHECKOUT */}
+            <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6 bg-slate-50">
+                {/* SELECTOR DE PACIENTE */}
+                <div className="space-y-2">
+                   <div className="flex justify-between items-center">
+                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Cliente</label>
+                     <button 
+                       onClick={() => setShowAddPatientModal(true)}
+                       className="text-[9px] font-black text-emerald-600 hover:text-emerald-700 uppercase tracking-widest flex items-center gap-1"
+                     >
+                       <Plus size={10} /> Nuevo
+                     </button>
+                   </div>
+                   <SearchableSelect 
+                     className="w-full bg-white text-sm font-bold"
+                     placeholder="PÚBLICO GENERAL"
+                     options={[
+                       { value: null, label: 'PÚBLICO GENERAL', subLabel: '1-9' },
+                       ...patients.map(p => ({ value: p.id, label: p.full_name, subLabel: p.rut }))
+                     ]}
+                     value={selectedPatient?.id}
+                     onChange={(val) => {
+                       if (val === null) setSelectedPatient({ id: null, full_name: 'PÚBLICO GENERAL', rut: '1-9' });
+                       else {
+                         const p = patients.find(pat => pat.id === val);
+                         if (p) setSelectedPatient(p);
+                       }
+                     }}
+                   />
+                </div>
+
+                {/* RESUMEN DE COMPRA */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 mt-auto">
+                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">Resumen</h3>
+                    <div className="space-y-2 text-sm font-bold text-slate-600">
+                        <div className="flex justify-between">
+                            <span>Subtotal ({totalItems} items)</span>
+                            <span>{fmtCLP(calculateTotal())}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                            <span>Descuentos</span>
+                            <span>$0</span>
+                        </div>
+                    </div>
+                    <div className="pt-4 border-t border-slate-100 mt-2">
+                        <div className="flex flex-col items-end">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total a Pagar</span>
+                            <span className="text-4xl font-black text-emerald-600 tracking-tighter leading-none">{fmtCLP(calculateTotal())}</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-          </div>
-        </div>
-      </div>
 
-      {/* ── BARRA DE BÚSQUEDA RÁPIDA ───────────────────────────────────── */}
-      <div className="px-6 py-3 bg-white border-b border-slate-200 shrink-0">
-        <button onClick={() => setShowSearchModal(true)}
-          className="w-full flex items-center gap-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl px-6 py-3.5 text-left hover:border-emerald-400 hover:bg-emerald-50/30 transition-all group">
-          <Search size={20} className="text-slate-300 group-hover:text-emerald-500 transition-colors shrink-0" />
-          <span className="text-sm font-bold text-slate-400 group-hover:text-emerald-600 transition-colors">
-            Buscar producto o escanear código... <span className="text-slate-300 text-xs">(F1)</span>
-          </span>
-          <span className="ml-auto bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-black">{totalItems} items</span>
-        </button>
-      </div>
-
-      {/* ── TABLA DEL CARRO (100% ANCHO) ───────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto bg-white">
-        {cart.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-200">
-            <ShoppingCart size={80} className="mb-4 opacity-15" />
-            <p className="text-lg font-black uppercase tracking-widest text-slate-300">Terminal Vacía</p>
-            <p className="text-xs font-bold text-slate-300 mt-1">Presiona F1 para buscar productos</p>
-          </div>
-        ) : (
-          <table className="w-full">
-            <thead className="sticky top-0 bg-slate-50 border-b border-slate-100 z-10">
-              <tr>
-                <th className="px-6 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">Producto</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center w-32">P. Unitario</th>
-                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center w-28">Cantidad</th>
-                <th className="px-6 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right w-36">Subtotal</th>
-                <th className="px-4 py-3 w-16"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {cart.map(item => (
-                <tr key={item.id} className="hover:bg-emerald-50/30 transition-colors">
-                  <td className="px-6 py-4">
-                    <span className="font-bold text-slate-800 text-sm block">{item.name}</span>
-                    <span className="text-[11px] text-slate-400 italic">{item.dci || 'Sin DCI'}</span>
-                    {item.validation_rut && <span className="block text-[10px] text-yellow-600 font-black mt-0.5 uppercase tracking-tighter">RUT DR: {item.validation_rut}</span>}
-                    {(item.prescription_id || item.correlativo_asociado) && (
-                      <span className="block text-[10px] text-red-600 font-black mt-0.5 uppercase tracking-tighter">
-                        RECETA: {item.correlativo_asociado || `#${item.prescription_id?.slice(0,8)}`}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-4 text-center text-sm font-bold text-slate-500">{fmtCLP(safePrice(item))}</td>
-                  <td className="px-4 py-4 text-center">
-                    <input
-                      ref={el => { qtyRefs.current[item.id] = el; }}
-                      type="number" min="1"
-                      className="w-20 text-center text-lg font-black text-slate-800 bg-slate-50 border-2 border-slate-200 rounded-xl py-2 outline-none focus:border-emerald-500 focus:bg-white transition-all"
-                      value={item.quantity}
-                      onChange={e => setQuantity(item.id, e.target.value)}
-                      onFocus={e => e.target.select()}
-                    />
-                  </td>
-                  <td className="px-6 py-4 text-right text-base font-black text-slate-800">
-                    {fmtCLP(safePrice(item) * Number(item.quantity || 0))}
-                  </td>
-                  <td className="px-4 py-4 text-center">
-                    <button onClick={() => removeFromCart(item.id)}
-                      className="w-11 h-11 flex items-center justify-center text-slate-300 hover:bg-red-50 hover:text-red-500 rounded-xl transition-all active:scale-90">
-                      <Trash2 size={18} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* ── STICKY FOOTER: TOTALES + COBRAR ────────────────────────────── */}
-      <div className="shrink-0 bg-white border-t-2 border-slate-200 px-6 py-4 flex items-center justify-between shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
-        <div className="flex items-center gap-8">
-          <div>
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Productos</span>
-            <span className="text-xl font-black text-slate-700">{cart.length}</span>
-          </div>
-          <div>
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Unidades</span>
-            <span className="text-xl font-black text-slate-700">{totalItems}</span>
-          </div>
+            {/* FOOTER BOTONES COBRAR */}
+            <div className="p-6 bg-white border-t border-slate-200 shrink-0">
+                <button disabled={cart.length === 0 || isProcessingSale} onClick={handleCheckout}
+                    className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black text-lg shadow-[0_8px_16px_rgba(5,150,105,0.2)] hover:bg-emerald-700 hover:shadow-[0_4px_8px_rgba(5,150,105,0.2)] transition-all active:scale-[0.98] disabled:opacity-40 flex items-center justify-center gap-3">
+                    {isProcessingSale ? <Loader2 size={24} className="animate-spin" /> : <><CreditCard size={24} /> COBRAR (F2)</>}
+                </button>
+            </div>
         </div>
-        <div className="flex items-center gap-6">
-          <div className="text-right">
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Total a Pagar</span>
-            <span className="text-3xl font-black text-slate-900">{fmtCLP(calculateTotal())}</span>
-          </div>
-          <button disabled={cart.length === 0 || isProcessingSale} onClick={handleCheckout}
-            className="bg-emerald-600 text-white px-10 py-4 rounded-2xl font-black text-base shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all active:scale-[0.98] disabled:opacity-40 flex items-center gap-3">
-            {isProcessingSale ? <Loader2 size={20} className="animate-spin" /> : <><CreditCard size={20} /> COBRAR (F2)</>}
-          </button>
-        </div>
-      </div>
 
       {/* ══════════════════════════════════════════════════════════════════ */}
       {/* MODAL: BÚSQUEDA DE PRODUCTOS (F1)                                */}
@@ -1221,8 +1411,8 @@ export default function PuntoDeVenta() {
                             </div>
                           </td>
                           <td className="px-4 py-5 text-right font-black">
-                            <span className={Number(p.price_sale) <= 0 ? 'text-red-400 italic text-[10px]' : 'text-slate-700 text-base'}>
-                              {Number(p.price_sale) <= 0 ? 'Sin Precio' : fmtCLP(p.price_sale)}
+                            <span className={Number(safePrice(p)) <= 0 ? 'text-red-400 italic text-[10px]' : 'text-slate-700 text-base'}>
+                              {Number(safePrice(p)) <= 0 ? 'Sin Precio' : fmtCLP(safePrice(p))}
                             </span>
                           </td>
                           <td className="px-4 py-5 text-center">
@@ -1276,7 +1466,7 @@ export default function PuntoDeVenta() {
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden border border-slate-200 animate-in fade-in slide-in-from-bottom-4 duration-300">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <div className="text-[10px] font-black text-purple-500 uppercase tracking-widest">Alternativas farmacéuticas</div>
+                <div className="text-[10px] font-black text-purple-500 uppercase tracking-widest">{bioequivalentPanelTitle}</div>
                 <h2 className="text-lg font-black text-slate-800 mt-0.5">{bioequivalentPanel.product?.name || 'Producto'}</h2>
                 <p className="text-xs text-slate-400 font-medium">DCI: {bioequivalentPanel.product?.dci || '-'}</p>
               </div>
@@ -1293,8 +1483,8 @@ export default function PuntoDeVenta() {
               ) : bioequivalentPanel.suggestions.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-slate-300">
                   <FlaskConical size={48} className="mb-4 opacity-20" />
-                  <p className="text-sm font-black uppercase tracking-widest">Sin alternativas disponibles</p>
-                  <p className="text-xs font-medium mt-2">No hay productos bioequivalentes con stock en esta sucursal</p>
+                  <p className="text-sm font-black uppercase tracking-widest">{bioequivalentPanelTitle}</p>
+                  <p className="text-xs font-medium mt-2">{bioequivalentPanelSubtitle}</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -1303,7 +1493,10 @@ export default function PuntoDeVenta() {
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0 flex-1">
                           <p className="font-black text-slate-800">{alt.product_name}</p>
-                          <div className="flex items-center gap-2 mt-1">
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black border ${getSuggestionType(alt) === 'BIOEQUIVALENTE_OFICIAL' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-sky-100 text-sky-800 border-sky-200'}`}>
+                              {getSuggestionTypeLabel(alt)}
+                            </span>
                             <span className="text-[11px] text-slate-400 font-medium uppercase">{alt.laboratory || 'Sin laboratorio'}</span>
                             <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black border ${getBadgeColor(alt.sale_condition)}`}>
                               {getConditionLabel(alt)}
@@ -1312,14 +1505,15 @@ export default function PuntoDeVenta() {
                           <div className="flex items-center gap-4 mt-3 text-xs">
                             <span className="flex items-center gap-1 text-slate-600">
                               <Package size={14} className="text-emerald-500" />
-                              Stock: <strong className="text-slate-800">{alt.stock_available}</strong>
+                              Stock: <strong className="text-slate-800">{Number(alt.available_stock_sales ?? alt.stock_available ?? 0)}</strong>
                             </span>
                             <span className="flex items-center gap-1 text-slate-600">
                               <span className="text-amber-500 font-bold">Vto:</span>
-                              {alt.next_expiry ? new Date(alt.next_expiry).toLocaleDateString('es-CL') : 'S/V'}
+                              {alt.nearest_expiration_date || alt.next_expiry ? new Date(alt.nearest_expiration_date || alt.next_expiry).toLocaleDateString('es-CL') : 'S/V'}
                             </span>
                             <span className="font-black text-slate-700">{fmtCLP(alt.sale_price)}</span>
                           </div>
+                          <p className="mt-3 text-xs text-slate-500">{alt.suggestion_reason || 'Coincide por DCI, concentración y forma farmacéutica.'}</p>
                         </div>
                         <button
                           onClick={() => addAlternativeToCart(alt)}
@@ -1336,7 +1530,7 @@ export default function PuntoDeVenta() {
 
             <div className="px-6 py-4 bg-slate-50 border-t border-slate-100">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">
-                Alternativas con misma concentración y forma farmacéutica
+                Los bioequivalentes oficiales están marcados por ISP; el resto son alternativas farmacéuticas.
               </p>
             </div>
           </div>
@@ -1352,14 +1546,14 @@ export default function PuntoDeVenta() {
             <div className="p-0">
               {/* TABS HEADER */}
               <div className="flex bg-slate-50 border-b border-slate-100">
-                <button 
-                  onClick={() => setValidationModal(prev => ({ ...prev, activeTab: 'LLAMAR' }))}
+                  <button type="button" 
+                    onClick={() => setValidationModal(prev => ({ ...prev, activeTab: 'LLAMAR' }))}
                   className={`flex-1 py-4 text-[11px] font-black uppercase tracking-widest transition-all ${validationModal.activeTab === 'LLAMAR' ? 'bg-white text-emerald-600 border-b-2 border-emerald-500' : 'text-slate-400 hover:text-slate-600'}`}
                 >
                   Llamar Receta
                 </button>
-                <button 
-                  onClick={() => setValidationModal(prev => ({ ...prev, activeTab: 'EXPRESS' }))}
+                  <button type="button" 
+                    onClick={() => setValidationModal(prev => ({ ...prev, activeTab: 'EXPRESS' }))}
                   className={`flex-1 py-4 text-[11px] font-black uppercase tracking-widest transition-all ${validationModal.activeTab === 'EXPRESS' ? 'bg-white text-[#4C3073] border-b-2 border-[#4C3073]' : 'text-slate-400 hover:text-slate-600'}`}
                 >
                   Ingreso Express
@@ -1386,16 +1580,17 @@ export default function PuntoDeVenta() {
                         className="w-full text-center py-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all font-mono font-bold text-xl"
                         value={validationModal.folioSearch}
                         onChange={(e) => setValidationModal(prev => ({ ...prev, folioSearch: e.target.value }))}
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleLlamarReceta(); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleLlamarReceta(); } }}
                       />
                       <div className="grid grid-cols-2 gap-4">
                         <button 
+                          type="button"
                           onClick={() => setValidationModal({ ...validationModal, isOpen: false })}
                           className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
                         >
                           Cancelar
                         </button>
-                        <button 
+                        <button type="button" 
                           onClick={handleLlamarReceta}
                           disabled={!validationModal.folioSearch || validationModal.isLoading}
                           className="py-3 bg-emerald-600 text-white rounded-xl font-black shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
@@ -1406,137 +1601,149 @@ export default function PuntoDeVenta() {
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-5">
-                    <div className="flex justify-center mb-2">
-                      <div className="p-4 rounded-full bg-yellow-50 text-yellow-500">
-                        <Stethoscope size={48} />
+                  <div className="space-y-4">
+                    <div className="flex flex-col items-center justify-center mb-2">
+                      <div className="p-3 rounded-full bg-red-50 text-red-500 mb-2 border border-red-100">
+                        <Stethoscope size={32} />
+                      </div>
+                      <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Prescripción</h3>
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className="text-[9px] font-black text-white bg-red-500 uppercase py-1 px-2 rounded flex items-center gap-1 shadow-sm">
+                          <ShieldAlert size={10} /> Controlado
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-700 bg-slate-100 py-1 px-2 rounded border border-slate-200">
+                          {validationModal.product?.name}
+                        </span>
                       </div>
                     </div>
-                    <div className="text-center space-y-2">
-                      <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Receta Simple</h3>
-                      <p className="text-[11px] font-black text-[#4C3073] uppercase bg-purple-50 py-2 px-4 rounded-xl inline-block">
-                        Autorizando producto: <span className="text-slate-800">{validationModal.product?.name}</span>
-                      </p>
-                    </div>
-                    <div className="space-y-4">
+
+                    <div className="space-y-3">
                       {/* MÉDICO */}
-                      <div className="border border-slate-200 rounded-xl overflow-hidden">
-                        <div className="bg-slate-50 px-4 py-2 border-b border-slate-100">
-                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Médico Prescriptor</p>
+                      <div className="border border-slate-200 rounded-lg overflow-hidden bg-white shadow-sm hover:border-slate-300 transition-colors">
+                        <div className="bg-slate-50 px-3 py-1.5 border-b border-slate-100 flex justify-between items-center">
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Médico Prescriptor</p>
                         </div>
-                        <div className="p-4 space-y-3">
+                        <div className="p-3">
                           {expressSearch.selectedDoctorId ? (
-                            <div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-lg px-4 py-3">
-                              <div>
-                                <p className="font-black text-sm text-slate-800">{expressSearch.doctorResults.find(d => d.id === expressSearch.selectedDoctorId)?.full_name}</p>
+                            <div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-md px-3 py-2">
+                              <div className="min-w-0">
+                                <p className="font-black text-sm text-slate-800 truncate">{expressSearch.doctorResults.find(d => d.id === expressSearch.selectedDoctorId)?.full_name}</p>
                                 <p className="text-[10px] text-slate-500 font-mono">{expressSearch.doctorResults.find(d => d.id === expressSearch.selectedDoctorId)?.rut}</p>
                               </div>
-                              <button onClick={() => setExpressSearch(prev => ({ ...prev, selectedDoctorId: null, doctorResults: [] }))} className="text-[10px] text-red-400 font-black uppercase hover:text-red-600">Cambiar</button>
+                              <button onClick={() => setExpressSearch(prev => ({ ...prev, selectedDoctorId: null, doctorResults: [] }))} className="text-[9px] text-red-500 font-black uppercase hover:underline ml-2">Cambiar</button>
                             </div>
                           ) : (
-                            <>
-                              <div className="flex gap-2">
-                                <input type="text" placeholder="RUT o nombre del médico" autoFocus
-                                  className="flex-1 py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] font-mono font-bold text-sm transition-all"
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <input type="text" placeholder="RUT o Nombre..." autoFocus
+                                  className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-md outline-none focus:border-[#4C3073] focus:bg-white text-sm font-bold transition-all"
                                   value={expressFormData.rut}
                                   onChange={(e) => handleDoctorQueryChange(e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') handleExpressDoctorSearch(); }}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleExpressDoctorSearch(); } }}
                                 />
-                                {expressSearch.searchingDoctor && <div className="flex items-center px-3"><Loader2 size={16} className="animate-spin text-[#4C3073]"/></div>}
+                                {expressSearch.searchingDoctor && <Loader2 size={16} className="animate-spin text-[#4C3073] shrink-0"/>}
                               </div>
-                              <p className="text-[10px] text-slate-400">Formato RUT: 12.345.678-9 · Busca por RUT o nombre</p>
                               {expressSearch.doctorResults.length > 0 && (
-                                <div className="border border-slate-100 rounded-lg overflow-hidden max-h-28 overflow-y-auto">
+                                <div className="border border-slate-100 rounded-md overflow-hidden max-h-24 overflow-y-auto bg-white shadow-inner">
                                   {expressSearch.doctorResults.map(d => (
-                                    <button key={d.id} type="button" onClick={() => { setExpressSearch(prev => ({ ...prev, selectedDoctorId: d.id })); setExpressFormData(prev => ({ ...prev, rut: d.rut, nombre: d.full_name })); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 border-b last:border-0 flex justify-between items-center">
-                                      <span className="font-bold text-sm text-slate-800">{d.full_name}</span>
-                                      <span className="text-[10px] text-slate-400 font-mono">{d.rut}</span>
+                                    <button key={d.id} type="button" onClick={() => { setExpressSearch(prev => ({ ...prev, selectedDoctorId: d.id })); setExpressFormData(prev => ({ ...prev, rut: d.rut, nombre: d.full_name })); }} className="w-full text-left px-3 py-1.5 hover:bg-purple-50 border-b last:border-0 flex justify-between items-center group">
+                                      <span className="font-bold text-xs text-slate-700 group-hover:text-[#4C3073] truncate mr-2">{d.full_name}</span>
+                                      <span className="text-[9px] text-slate-400 font-mono shrink-0">{d.rut}</span>
                                     </button>
                                   ))}
                                 </div>
                               )}
-                              <input type="text" placeholder="Nombre del médico (para crear nuevo)"
-                                className="w-full py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] font-bold text-sm transition-all"
+                              <input type="text" placeholder="Nombre completo (si es nuevo)..."
+                                className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-md outline-none focus:border-[#4C3073] focus:bg-white text-xs font-medium transition-all"
                                 value={expressFormData.nombre}
                                 onChange={(e) => setExpressFormData(prev => ({ ...prev, nombre: e.target.value }))}
                               />
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      {/* FOLIO */}
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">N° de Folio / Receta *</label>
-                        <input type="text" placeholder="Ej: REC-10045"
-                          className="w-full py-3 px-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-[#4C3073] transition-all font-mono font-bold text-sm"
-                          value={expressFormData.folio}
-                          onChange={(e) => setExpressFormData(prev => ({ ...prev, folio: e.target.value }))}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleExpressValidate(); }}
-                        />
-                      </div>
-                      {/* PACIENTE */}
-                      <div className="border border-slate-200 rounded-xl overflow-hidden">
-                        <div className="bg-slate-50 px-4 py-2 border-b border-slate-100">
-                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Paciente</p>
-                        </div>
-                        <div className="p-4 space-y-3">
-                          {expressSearch.selectedPatientId ? (
-                            <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
-                              <div>
-                                <p className="font-black text-sm text-slate-800">{expressSearch.patientResults.find(p => p.id === expressSearch.selectedPatientId)?.full_name}</p>
-                                <p className="text-[10px] text-slate-500 font-mono">{expressSearch.patientResults.find(p => p.id === expressSearch.selectedPatientId)?.rut}</p>
-                              </div>
-                              <button onClick={() => setExpressSearch(prev => ({ ...prev, selectedPatientId: null, patientResults: [] }))} className="text-[10px] text-red-400 font-black uppercase hover:text-red-600">Cambiar</button>
                             </div>
-                          ) : (
-                            <>
-                              <div className="flex gap-2">
-                                <input type="text" placeholder="RUT o nombre del paciente"
-                                  className="flex-1 py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 font-mono font-bold text-sm transition-all"
-                                  value={expressFormData.patientRut}
-                                  onChange={(e) => handlePatientQueryChange(e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') handleExpressPatientSearch(); }}
-                                />
-                                {expressSearch.searchingPatient && <div className="flex items-center px-3"><Loader2 size={16} className="animate-spin text-emerald-600"/></div>}
-                              </div>
-                              <p className="text-[10px] text-slate-400">Formato RUT: 12.345.678-9 · Busca por RUT o nombre</p>
-                              {expressSearch.patientResults.length > 0 && (
-                                <div className="border border-slate-100 rounded-lg overflow-hidden max-h-28 overflow-y-auto">
-                                  {expressSearch.patientResults.map(p => (
-                                    <button key={p.id} type="button" onClick={() => { setExpressSearch(prev => ({ ...prev, selectedPatientId: p.id })); setExpressFormData(prev => ({ ...prev, patientRut: p.rut, patientNombre: p.full_name })); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 border-b last:border-0 flex justify-between items-center">
-                                      <span className="font-bold text-sm text-slate-800">{p.full_name}</span>
-                                      <span className="text-[10px] text-slate-400 font-mono">{p.rut}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                              <input type="text" placeholder="Nombre del paciente (para crear nuevo)"
-                                className="w-full py-2.5 px-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 font-bold text-sm transition-all"
-                                value={expressFormData.patientNombre}
-                                onChange={(e) => setExpressFormData(prev => ({ ...prev, patientNombre: e.target.value }))}
-                              />
-                            </>
                           )}
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-4">
+
+                      {/* FOLIO Y PACIENTE ROW */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="border border-slate-200 rounded-lg overflow-hidden bg-white shadow-sm hover:border-slate-300 transition-colors flex flex-col">
+                           <div className="bg-slate-50 px-3 py-1.5 border-b border-slate-100">
+                             <label className="block text-[9px] font-black text-slate-500 uppercase tracking-widest">N° Receta / Folio *</label>
+                           </div>
+                           <div className="p-3 flex-1 flex items-center justify-center">
+                             <input type="text" placeholder="Ej: REC-10045"
+                               className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-md outline-none focus:border-[#4C3073] focus:bg-white transition-all font-mono font-bold text-sm text-center"
+                               value={expressFormData.folio}
+                               onChange={(e) => setExpressFormData(prev => ({ ...prev, folio: e.target.value }))}
+                               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); document.getElementById('expressPatientInput')?.focus(); } }}
+                             />
+                           </div>
+                        </div>
+
+                        <div className="border border-slate-200 rounded-lg overflow-hidden bg-white shadow-sm hover:border-slate-300 transition-colors flex flex-col">
+                          <div className="bg-slate-50 px-3 py-1.5 border-b border-slate-100">
+                            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Paciente</p>
+                          </div>
+                          <div className="p-3 flex-1 flex flex-col">
+                            {expressSearch.selectedPatientId ? (
+                              <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2 flex-1">
+                                <div className="min-w-0">
+                                  <p className="font-black text-xs text-slate-800 truncate">{expressSearch.patientResults.find(p => p.id === expressSearch.selectedPatientId)?.full_name}</p>
+                                  <p className="text-[9px] text-slate-500 font-mono">{expressSearch.patientResults.find(p => p.id === expressSearch.selectedPatientId)?.rut}</p>
+                                </div>
+                                <button onClick={() => setExpressSearch(prev => ({ ...prev, selectedPatientId: null, patientResults: [] }))} className="text-[9px] text-red-500 font-black uppercase hover:underline ml-2">Cambiar</button>
+                              </div>
+                            ) : (
+                              <div className="space-y-2 flex-1 flex flex-col justify-center">
+                                <div className="flex items-center gap-2">
+                                  <input id="expressPatientInput" type="text" placeholder="RUT o Nombre..."
+                                    className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-md outline-none focus:border-emerald-500 focus:bg-white font-mono font-bold text-xs transition-all"
+                                    value={expressFormData.patientRut}
+                                    onChange={(e) => handlePatientQueryChange(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleExpressPatientSearch(); } }}
+                                  />
+                                  {expressSearch.searchingPatient && <Loader2 size={16} className="animate-spin text-emerald-600 shrink-0"/>}
+                                </div>
+                                {expressSearch.patientResults.length > 0 && (
+                                  <div className="border border-slate-100 rounded-md overflow-hidden max-h-24 overflow-y-auto bg-white shadow-inner absolute z-20 w-64 mt-10">
+                                    {expressSearch.patientResults.map(p => (
+                                      <button key={p.id} type="button" onClick={() => { setExpressSearch(prev => ({ ...prev, selectedPatientId: p.id })); setExpressFormData(prev => ({ ...prev, patientRut: p.rut, patientNombre: p.full_name })); document.getElementById('expressValidateBtn')?.focus(); }} className="w-full text-left px-3 py-1.5 hover:bg-emerald-50 border-b last:border-0 flex justify-between items-center group">
+                                        <span className="font-bold text-xs text-slate-700 group-hover:text-emerald-700 truncate mr-2">{p.full_name}</span>
+                                        <span className="text-[9px] text-slate-400 font-mono shrink-0">{p.rut}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                <input type="text" placeholder="Nombre completo..."
+                                  className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-md outline-none focus:border-emerald-500 focus:bg-white text-xs font-medium transition-all"
+                                  value={expressFormData.patientNombre}
+                                  onChange={(e) => setExpressFormData(prev => ({ ...prev, patientNombre: e.target.value }))}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleExpressValidate(); } }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3 pt-2">
                         <button 
+                          type="button"
                           onClick={() => setValidationModal({ ...validationModal, isOpen: false })}
-                          className="py-3 font-bold text-slate-400 hover:text-slate-600 uppercase text-xs"
+                          className="flex-1 py-3 font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl uppercase text-[10px] tracking-widest transition-colors"
                         >
                           Cancelar
                         </button>
-                      <button 
-                          onClick={handleExpressValidate}
+                        <button id="expressValidateBtn" type="button" 
+                           onClick={handleExpressValidate}
                           disabled={
-                            validationModal.isLoading ||
+                            validationModal.isLoading || isCreatingExpressPrescription ||
                             !expressFormData.folio.trim() ||
                             !(expressSearch.selectedDoctorId || (expressFormData.rut.trim() && expressFormData.nombre.trim())) ||
                             !(expressSearch.selectedPatientId || (expressFormData.patientRut.trim() && expressFormData.patientNombre.trim()))
                           }
-                          className="py-3 bg-[#4C3073] text-white rounded-xl font-black shadow-lg hover:brightness-110 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                          className="flex-[2] py-3 bg-emerald-600 text-white rounded-xl font-black shadow-md shadow-emerald-200 hover:bg-emerald-700 hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                         >
-                          {validationModal.isLoading ? <Loader2 size={16} className="animate-spin"/> : 'VALIDAR Y AGREGAR'}
+                          {validationModal.isLoading ? <Loader2 size={16} className="animate-spin"/> : 'AUTORIZAR Y AGREGAR'}
                         </button>
                       </div>
                     </div>
@@ -2036,142 +2243,109 @@ export default function PuntoDeVenta() {
 
       {/* ── RECEIPT CONFIRMATION OVERLAY ── */}
       {saleReceipt && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-gray-900/70 backdrop-blur-sm p-4">
-          <div className="bg-white w-full max-w-lg rounded-sm shadow-2xl flex flex-col max-h-[90vh] overflow-hidden font-sans" id="pos-receipt-panel">
-
-            {/* ── Header ── */}
-            <div className="bg-[#4C3073] px-6 py-5 flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <CheckCircle2 size={22} className="text-emerald-400" />
-                  <span className="text-white font-black text-lg uppercase tracking-tight">
-                    {saleReceipt.dte_doc
-                      ? `BOLETA INTERNA FOLIO ${saleReceipt.dte_doc.folio}`
-                      : 'VENTA REGISTRADA'}
-                  </span>
-                </div>
-                <p className="text-white/60 text-xs font-bold uppercase tracking-widest">
-                  {saleReceipt.dte_doc
-                    ? `Emitida el ${new Intl.DateTimeFormat('es-CL',{dateStyle:'short',timeStyle:'short'}).format(new Date(saleReceipt.dte_doc.issued_at))}`
-                    : 'BOLETA INTERNA PENDIENTE DE GENERACIÓN'}
-                </p>
-              </div>
-              <button onClick={() => setSaleReceipt(null)} className="text-white/50 hover:text-white transition-colors mt-1">
-                <X size={22} />
-              </button>
-            </div>
-
-            {/* ── DTE pending warning ── */}
-            {saleReceipt.dte_warning && (
-              <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-center gap-2 text-amber-700">
-                <ShieldAlert size={16} className="shrink-0" />
-                <p className="text-[11px] font-bold">{saleReceipt.dte_warning}</p>
-              </div>
-            )}
-
-            {/* ── Badge ── */}
-            <div className="bg-red-50 border-b border-red-200 px-6 py-2 flex items-center justify-center gap-2">
-              <ShieldAlert size={13} className="text-red-600" />
-              <span className="text-[10px] font-black text-red-700 uppercase tracking-widest">DOCUMENTO INTERNO — NO VÁLIDO TRIBUTARIAMENTE</span>
-            </div>
-
-            {/* ── Content ── */}
-            <div className="flex-1 overflow-auto px-6 py-5 space-y-5">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gray-50 border border-gray-100 rounded-sm p-3">
-                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Vendido</p>
-                  <p className="text-2xl font-black text-gray-900">
-                    {new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(saleReceipt.total_amount)}
-                  </p>
-                </div>
-                <div className="bg-gray-50 border border-gray-100 rounded-sm p-3">
-                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Medio de Pago</p>
-                  <p className="text-lg font-black text-gray-700">{saleReceipt.payment_method || 'CASH'}</p>
-                  {saleReceipt.dte_doc && (
-                    <p className="text-[9px] text-[#4C3073] font-bold mt-1">Folio: #{saleReceipt.dte_doc.folio}</p>
-                  )}
-                </div>
-              </div>
-
-              {saleReceipt.items.length > 0 && (
-                <div className="border border-gray-200 rounded-sm overflow-hidden">
-                  <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
-                    <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Productos Vendidos</p>
+        <>
+          <style>{`@media print { body * { visibility: hidden !important; } #pos-receipt-modal, #pos-receipt-modal * { visibility: visible !important; } #pos-receipt-modal { position: absolute !important; inset: 0 !important; background: #fff !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 80mm !important; } .hide-on-print { display: none !important; } }`}</style>
+          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-gray-900/80 backdrop-blur-sm p-4">
+            <div className="relative flex flex-col w-full max-w-[340px] max-h-[92vh] bg-white shadow-2xl rounded-sm overflow-hidden animate-in zoom-in-95 duration-200" id="pos-receipt-modal">
+              {/* Zig-zag top border for thermal effect */}
+              <div className="absolute top-0 left-0 right-0 h-2 bg-[radial-gradient(circle,transparent_4px,#fff_5px)] bg-[length:10px_10px] -mt-2"></div>
+              
+              <div className="flex-1 overflow-auto p-6 font-mono text-slate-800 bg-white">
+                <div className="text-center mb-6">
+                  <div className="w-12 h-12 bg-slate-900 rounded-lg flex items-center justify-center mx-auto mb-3">
+                     <Package size={24} className="text-white" />
                   </div>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-100">
-                        <th className="px-4 py-2 text-left text-[9px] font-black text-gray-400 uppercase">Producto</th>
-                        <th className="px-4 py-2 text-center text-[9px] font-black text-gray-400 uppercase">Cant</th>
-                        <th className="px-4 py-2 text-right text-[9px] font-black text-gray-400 uppercase">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {saleReceipt.items.map((item, i) => (
-                        <tr key={i}>
-                          <td className="px-4 py-2 font-bold text-gray-800 uppercase">{item.product?.name || 'Producto'}</td>
-                          <td className="px-4 py-2 text-center text-gray-600">{item.quantity}</td>
-                          <td className="px-4 py-2 text-right font-bold text-gray-800">
-                            {new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(item.subtotal)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <h2 className="text-lg font-black uppercase tracking-widest leading-none">Farmadatix</h2>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase mt-1">{saleReceipt.warehouse_name || 'Sucursal Principal'}</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">COMPROBANTE INTERNO DE VENTA</p>
+                  <div className="mt-4 px-2 py-1 bg-red-50 text-red-600 text-[9px] font-black uppercase tracking-widest border border-red-200 border-dashed">
+                    NO VÁLIDO TRIBUTARIAMENTE
+                  </div>
                 </div>
-              )}
-            </div>
 
-            {/* ── Footer Actions ── */}
-            <div className="border-t border-gray-200 px-6 py-4 bg-gray-50 flex flex-wrap gap-2 justify-between items-center">
-              <div className="flex gap-2 flex-wrap">
+                <div className="space-y-2 border-y border-dashed border-slate-300 py-4 mb-4 text-[10px] uppercase font-bold">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Folio:</span>
+                    <span className="text-slate-900">{saleReceipt.dte_doc?.folio ? `#${saleReceipt.dte_doc.folio}` : 'PENDIENTE'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Fecha:</span>
+                    <span className="text-slate-900">{saleReceipt.dte_doc ? new Intl.DateTimeFormat('es-CL',{dateStyle:'short',timeStyle:'short'}).format(new Date(saleReceipt.dte_doc.issued_at)) : '-'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Atiende:</span>
+                    <span className="text-slate-900 truncate max-w-[120px] text-right">{saleReceipt.operator_name || 'Operador'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Pago:</span>
+                    <span className="text-slate-900">{saleReceipt.payment_method === 'CASH' ? 'EFECTIVO' : saleReceipt.payment_method === 'CARD' ? 'TARJETA' : 'TRANSFERENCIA'}</span>
+                  </div>
+                </div>
 
-                {/* Ver Boleta */}
-                {saleReceipt.dte_doc ? (
-                  <button
-                    onClick={() => printInternalDte(saleReceipt.dte_doc, saleReceipt.items)}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-[#4C3073] text-white text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-[#3a2457] transition-colors"
-                  >
-                    <Receipt size={15} />
-                    Ver Boleta
-                  </button>
-                ) : (
-                  <div className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 text-[11px] font-black uppercase tracking-widest rounded-sm cursor-not-allowed">
-                    <Receipt size={15} />
-                    Boleta Pendiente
+                {saleReceipt.items.length > 0 && (
+                  <div className="mb-4">
+                    <table className="w-full text-[10px] font-bold">
+                      <thead>
+                        <tr className="border-b border-dashed border-slate-300 text-slate-500">
+                          <th className="py-2 text-left font-bold uppercase w-1/2">Cant x Artículo</th>
+                          <th className="py-2 text-right font-bold uppercase">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-dashed divide-slate-100">
+                        {saleReceipt.items.map((item, i) => (
+                          <tr key={i}>
+                            <td className="py-2 text-left uppercase">
+                              <span className="block text-slate-900">{item.product?.name || 'Producto'}</span>
+                              <span className="text-slate-500">{item.quantity} x {new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(item.unit_price || item.price_sale || 0)}</span>
+                            </td>
+                            <td className="py-2 text-right text-slate-900 items-start align-top pt-2">
+                              {new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(item.subtotal)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
 
-                {/* Imprimir */}
-                <button
-                  onClick={() => printInternalDte(saleReceipt.dte_doc, saleReceipt.items)}
-                  disabled={!saleReceipt.dte_doc}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-gray-800 text-white text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <Banknote size={15} />
-                  Imprimir
-                </button>
+                <div className="border-t-2 border-slate-900 pt-3 mb-6">
+                  <div className="flex justify-between items-end">
+                    <span className="text-[14px] font-black uppercase">Total:</span>
+                    <span className="text-2xl font-black">{new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(saleReceipt.total_amount)}</span>
+                  </div>
+                </div>
 
-                {/* Descargar PDF */}
+                <div className="text-center space-y-4">
+                  <div className="flex justify-center">
+                    <Barcode size={48} className="text-slate-900" strokeWidth={1} />
+                  </div>
+                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                    Gracias por su preferencia<br/>
+                    CONSERVE ESTE TICKET
+                  </p>
+                </div>
+              </div>
+              
+              {/* Zig-zag bottom border for thermal effect */}
+              <div className="h-2 bg-[radial-gradient(circle,transparent_4px,#fff_5px)] bg-[length:10px_10px] transform rotate-180"></div>
+
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col gap-2 shrink-0 hide-on-print">
                 <button
-                  onClick={() => downloadDtePdf(saleReceipt.dte_doc, saleReceipt.items)}
-                  disabled={!saleReceipt.dte_doc}
-                  className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 text-[11px] font-black uppercase tracking-widest rounded-sm hover:bg-gray-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={handlePrintReceipt}
+                  className="w-full py-3 bg-slate-900 text-white text-[11px] font-black uppercase tracking-widest rounded-xl shadow-lg hover:bg-slate-800 transition-colors flex items-center justify-center gap-2"
                 >
-                  <ArrowUpCircle size={15} />
-                  Descargar PDF
+                  <Receipt size={16} /> Imprimir Comprobante
+                </button>
+                <button
+                  onClick={() => setSaleReceipt(null)}
+                  className="w-full py-3 text-[11px] font-black text-slate-500 hover:text-slate-800 uppercase tracking-widest transition-colors flex items-center justify-center gap-2"
+                >
+                  <X size={16} /> Cerrar y Continuar
                 </button>
               </div>
-
-              <button
-                onClick={() => setSaleReceipt(null)}
-                className="px-4 py-2 text-[11px] font-black text-[#4C3073] uppercase tracking-widest hover:underline transition-colors"
-              >
-                Nueva Venta
-              </button>
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
